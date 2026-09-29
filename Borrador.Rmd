@@ -1,0 +1,371 @@
+---
+title: "Borrador"
+author: "Gustavo A"
+date: "2026-09-29"
+output: html_document
+---
+
+```{r}
+paquetes <- c("quantmod", "lubridate")
+
+for (paquete in paquetes) {
+  if (!requireNamespace(paquete, quietly = TRUE)) {
+    install.packages(paquete, repos = "https://cloud.r-project.org")
+  }
+}
+
+library(quantmod)
+library(lubridate)
+```
+
+```{r}
+# 2. Fecha fija y datos de la opción --------------------------------------
+
+fecha_valoracion <- as.Date("2026-09-28")
+fecha_inicio <- fecha_valoracion %m-% years(5)
+
+opcion <- data.frame(
+  contrato = "NTR261218C00072500",
+  tipo = "Call",
+  vencimiento = as.Date("2026-12-18"),
+  strike = 72.50,
+  bid = 4.30,
+  ask = 4.80,
+  ultimo_precio = 4.50
+)
+
+opcion$precio_medio <- (opcion$bid + opcion$ask) / 2
+opcion$spread <- opcion$ask - opcion$bid
+
+# Precio de cierre regular mostrado en tu captura.
+# El 72.20 de poscierre NO se utiliza.
+S0 <- 71.98
+opcion
+```
+
+```{r}
+
+ntr <- getSymbols(
+  "NTR",
+  src = "yahoo",
+  from = fecha_inicio,
+  to = fecha_valoracion + 1,
+  auto.assign = FALSE
+)
+
+# Aunque Yahoo devolviera datos posteriores, mantenemos el corte fijado.
+ntr <- ntr[as.Date(zoo::index(ntr)) <= fecha_valoracion]
+
+fila_cierre <- ntr[as.character(fecha_valoracion)]
+
+if (NROW(fila_cierre) != 1) {
+  stop("Yahoo no devolvió un cierre de NTR para el 28/09/2026.")
+}
+
+cierre_yahoo <- as.numeric(Cl(fila_cierre))
+
+if (abs(cierre_yahoo - S0) > 0.05) {
+  warning(
+    "El cierre descargado de Yahoo difiere del 71.98 de la captura. ",
+    "Revisa la fecha y el precio antes de continuar."
+  )
+}
+
+# Guardamos los datos usados como respaldo de esta fecha de corte.
+historico_ntr <- data.frame(
+  fecha = as.Date(zoo::index(ntr)),
+  close = as.numeric(Cl(ntr)),
+  adjusted = as.numeric(Ad(ntr))
+)
+
+write.csv(
+  historico_ntr,
+  "NTR_historico_20260928.csv",
+  row.names = FALSE
+)
+
+write.csv(
+  opcion,
+  "NTR_call_20260928.csv",
+  row.names = FALSE
+)
+```
+
+```{r}
+# 4. Volatilidad histórica: 252 rendimientos diarios ----------------------
+
+precios_ajustados <- historico_ntr$adjusted
+precios_ajustados <- precios_ajustados[
+  is.finite(precios_ajustados) & precios_ajustados > 0
+]
+
+if (length(precios_ajustados) < 253) {
+  stop("Se necesitan al menos 253 precios para obtener 252 rendimientos.")
+}
+
+rendimientos <- tail(diff(log(precios_ajustados)), 252)
+sigma <- sd(rendimientos) * sqrt(252)
+```
+
+```{r}
+# 5. Tasa libre de riesgo: letra del Tesoro a 3 meses ---------------------
+
+dtb3 <- getSymbols(
+  "DTB3",
+  src = "FRED",
+  from = fecha_valoracion - 30,
+  to = fecha_valoracion + 1,
+  auto.assign = FALSE
+)
+
+tabla_tasas <- data.frame(
+  fecha = as.Date(zoo::index(dtb3)),
+  tasa_descuento_pct = as.numeric(dtb3[, 1])
+)
+
+tabla_tasas <- tabla_tasas[
+  tabla_tasas$fecha <= fecha_valoracion &
+    is.finite(tabla_tasas$tasa_descuento_pct),
+]
+
+if (nrow(tabla_tasas) == 0) {
+  stop("No se encontró una tasa DTB3 disponible hasta la fecha de valoración.")
+}
+
+tasa_usada <- tabla_tasas[nrow(tabla_tasas), ]
+
+# DTB3 está en porcentaje anual sobre base de descuento de 360 días.
+# Aproximamos el plazo de la letra de tres meses mediante 91 días.
+dias_letra <- 91
+descuento <- tasa_usada$tasa_descuento_pct / 100
+precio_letra <- 1 - descuento * dias_letra / 360
+
+if (precio_letra <= 0) {
+  stop("La tasa DTB3 produjo un precio de letra inválido.")
+}
+
+# Tasa anual con capitalización continua, en base de 365 días.
+r <- -log(precio_letra) / (dias_letra / 365)
+
+write.csv(
+  tasa_usada,
+  "DTB3_tasa_usada_20260928.csv",
+  row.names = FALSE
+)
+
+```
+
+
+```{r}
+# 6. Tiempo hasta el vencimiento ------------------------------------------
+
+dias_vencimiento <- as.numeric(
+  opcion$vencimiento - fecha_valoracion
+)
+
+plazo_anios <- dias_vencimiento / 365
+
+if (plazo_anios <= 0 || sigma <= 0) {
+  stop("El plazo y la volatilidad deben ser positivos.")
+}
+```
+
+
+```{r}
+# 7. Fórmula cerrada de Björk: call europea sin dividendos ----------------
+
+precio_bs_call <- function(S, K, r, sigma, plazo) {
+  d1 <- (
+    log(S / K) + (r + sigma^2 / 2) * plazo
+  ) / (sigma * sqrt(plazo))
+
+  d2 <- d1 - sigma * sqrt(plazo)
+
+  S * pnorm(d1) - K * exp(-r * plazo) * pnorm(d2)
+}
+
+precio_bs_bjork <- precio_bs_call(
+  S = S0,
+  K = opcion$strike,
+  r = r,
+  sigma = sigma,
+  plazo = plazo_anios
+)
+```
+
+```{r}
+# 8. Aproximación con el dividendo conocido -------------------------------
+
+dividendos <- data.frame(
+  fecha_exdividendo = as.Date("2026-09-29"),
+  monto_por_accion = 0.55
+)
+
+dividendos <- dividendos[
+  dividendos$fecha_exdividendo > fecha_valoracion &
+    dividendos$fecha_exdividendo <= opcion$vencimiento,
+  ,
+  drop = FALSE
+]
+
+tiempo_dividendos <- as.numeric(
+  dividendos$fecha_exdividendo - fecha_valoracion
+) / 365
+
+vp_dividendos <- sum(
+  dividendos$monto_por_accion * exp(-r * tiempo_dividendos)
+)
+
+S_ajustado <- S0 - vp_dividendos
+
+if (S_ajustado <= 0) {
+  stop("El valor presente de dividendos supera el precio de la acción.")
+}
+
+precio_bs_div_aprox <- precio_bs_call(
+  S = S_ajustado,
+  K = opcion$strike,
+  r = r,
+  sigma = sigma,
+  plazo = plazo_anios
+)
+```
+
+
+```{r}
+# 9. Resumen --------------------------------------------------------------
+
+resultados <- data.frame(
+  metodo = c(
+    "Björk 7.13: sin dividendos",
+    "BS con ajuste por dividendo: aproximación"
+  ),
+  precio_teorico = c(precio_bs_bjork, precio_bs_div_aprox)
+)
+
+resultados$diferencia_con_medio <- (
+  resultados$precio_teorico - opcion$precio_medio
+)
+
+resultados$dentro_del_bid_ask <- (
+  resultados$precio_teorico >= opcion$bid &
+    resultados$precio_teorico <= opcion$ask
+)
+
+cat("OPCIÓN ELEGIDA\n")
+print(opcion, row.names = FALSE)
+
+cat("\nDATOS DEL MODELO\n")
+cat(sprintf("Cierre NTR de la captura: USD %.2f\n", S0))
+cat(sprintf("Cierre NTR descargado:  USD %.2f\n", cierre_yahoo))
+cat(sprintf("Vencimiento: %d días; T = %.6f años\n",
+            dias_vencimiento, plazo_anios))
+cat(sprintf("Volatilidad histórica: %.4f (%.2f%%)\n",
+            sigma, 100 * sigma))
+cat(sprintf("DTB3 utilizada: %.2f%%, fecha %s\n",
+            tasa_usada$tasa_descuento_pct,
+            as.character(tasa_usada$fecha)))
+cat(sprintf("Tasa continua r: %.4f (%.2f%%)\n",
+            r, 100 * r))
+cat(sprintf("Valor presente del dividendo: USD %.4f\n",
+            vp_dividendos))
+
+cat("\nVALORACIONES EN USD POR ACCIÓN\n")
+print(resultados, row.names = FALSE, digits = 4)
+```
+
+```{r}
+d1 <- (log(S0 / opcion$strike) +
+         (r + sigma^2 / 2) * plazo_anios) /
+      (sigma * sqrt(plazo_anios))
+d2 <- d1 - sigma * sqrt(plazo_anios)
+
+cat(sprintf("d1 = %.6f; d2 = %.6f\n", d1, d2))
+```
+
+```{r}
+# Histórica con una ventana cercana al vencimiento
+n_corto <- round(plazo_anios * 252)
+todos_los_retornos <- diff(log(precios_ajustados))
+
+sigma_corta <- sd(tail(todos_los_retornos, n_corto)) * sqrt(252)
+sigma_252 <- sd(tail(todos_los_retornos, 252)) * sqrt(252)
+
+# Volatilidad implícita: hallar sigma que reproduce un precio observado
+vol_implicita <- function(precio_observado, spot_modelo) {
+  diferencia <- function(vol) {
+    precio_bs_call(
+      S = spot_modelo,
+      K = opcion$strike,
+      r = r,
+      sigma = vol,
+      plazo = plazo_anios
+    ) - precio_observado
+  }
+
+  uniroot(diferencia, interval = c(0.0001, 2))$root
+}
+
+# Inversión literal de la fórmula de Björk, sin dividendos
+iv_sin_div <- vol_implicita(opcion$precio_medio, S0)
+
+# Inversión del modelo con el ajuste aproximado por dividendo
+iv_bid <- vol_implicita(opcion$bid, S_ajustado)
+iv_medio <- vol_implicita(opcion$precio_medio, S_ajustado)
+iv_ask <- vol_implicita(opcion$ask, S_ajustado)
+
+comparacion <- data.frame(
+  medida = c(
+    paste0("Histórica: ", n_corto, " rendimientos"),
+    "Histórica: 252 rendimientos",
+    "Implícita sin dividendos: precio medio",
+    "Implícita con ajuste: bid",
+    "Implícita con ajuste: precio medio",
+    "Implícita con ajuste: ask"
+  ),
+  volatilidad_pct = round(
+    100 * c(
+      sigma_corta, sigma_252, iv_sin_div,
+      iv_bid, iv_medio, iv_ask
+    ),
+    2
+  )
+)
+
+print(comparacion, row.names = FALSE)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

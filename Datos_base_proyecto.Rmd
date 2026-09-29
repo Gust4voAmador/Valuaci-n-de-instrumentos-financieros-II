@@ -1,0 +1,123 @@
+---
+title: "Exploración Proyecto"
+author: "Gustavo Amador Fonseca C20451"
+date: "2026-09-26"
+output: html_document
+---
+
+```{r}
+#install.packages("quantmod")
+library(quantmod)
+library(lubridate)
+```
+
+```{r}
+fecha_fin <- Sys.Date()
+fecha_inicio <- fecha_fin %m-% years(5)
+
+getSymbols(
+  "NTR",
+  src = "yahoo",
+  from = fecha_inicio,
+  to = fecha_fin
+)
+```
+
+```{r}
+datos_ntr <- data.frame(
+  Fecha = index(NTR),
+  coredata(NTR)
+)
+
+rownames(datos_ntr) <- NULL
+
+colnames(datos_ntr) <- c(
+  "Fecha",
+  "Open",
+  "High",
+  "Low",
+  "Close",
+  "Volume",
+  "Adjusted"
+)
+
+head(datos_ntr)
+```
+
+```{r}
+datos_ntr
+```
+
+# Cadena de opciones
+
+```{r}
+opciones_buenas <- data.frame(
+  tipo = c(
+    "Call", "Put",
+    "Call", "Put",
+    "Call", "Put",
+    "Call", "Put",
+    "Call", "Put"
+  ),
+
+  vencimiento = as.Date(rep("2026-12-18", 10)),
+
+  strike = c(
+    65, 65,
+    67.5, 67.5,
+    70, 70,
+    72.5, 72.5,
+    75, 75
+  ),
+
+  bid = c(
+    7.80, 1.20,
+    6.80, 2.15,
+    5.10, 3.10,
+    4.00, 3.40,
+    2.80, 4.10
+  ),
+
+  ask = c(
+    10.00, 2.20,
+    7.80, 3.10,
+    6.20, 3.70,
+    5.20, 5.60,
+    4.00, 7.20
+  ),
+
+  volumen = c(
+    86, 51,
+    61, 1,
+    2, 10,
+    3, 1,
+    5, 3
+  ),
+
+  open_interest = c(
+    167, 172,
+    103, 35,
+    174, 226,
+    85, 66,
+    1123, 33
+  ),
+
+  iv = c(
+    0.4352, 0.3845,
+    0.3836, 0.3860,
+    0.3705, 0.3502,
+    0.3879, 0.3976,
+    0.3767, 0.4083
+  )
+)
+
+opciones_buenas$mid <- (opciones_buenas$bid + opciones_buenas$ask) / 2
+
+opciones_buenas$spread <- opciones_buenas$ask - opciones_buenas$bid
+
+opciones_buenas$spread_relativo <- 
+  opciones_buenas$spread / opciones_buenas$mid
+
+opciones_buenas
+
+```
