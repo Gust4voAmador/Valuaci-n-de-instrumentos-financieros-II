@@ -5,6 +5,10 @@ date: "2026-09-29"
 output: html_document
 ---
 
+# Preparación para cálculos
+
+## Carga de paquetes
+
 ```{r}
 paquetes <- c("quantmod", "lubridate")
 
@@ -18,11 +22,14 @@ library(quantmod)
 library(lubridate)
 ```
 
-```{r}
-# 2. Fecha fija y datos de la opción --------------------------------------
+## Fecha fija y datos de la opción
 
+```{r}
+
+# Se escoje el lunes,ya que aun aplica lo del dividendo
 fecha_valoracion <- as.Date("2026-09-28")
 fecha_inicio <- fecha_valoracion %m-% years(5)
+
 
 opcion <- data.frame(
   contrato = "NTR261218C00072500",
@@ -43,8 +50,9 @@ S0 <- 71.98
 opcion
 ```
 
-```{r}
+## Carga de precios históricos de la acción
 
+```{r}
 ntr <- getSymbols(
   "NTR",
   src = "yahoo",
@@ -53,25 +61,13 @@ ntr <- getSymbols(
   auto.assign = FALSE
 )
 
-# Aunque Yahoo devolviera datos posteriores, mantenemos el corte fijado.
+# Aunque Yahoo devolviera más datos posteriores, mantenemos el corte fijado.
 ntr <- ntr[as.Date(zoo::index(ntr)) <= fecha_valoracion]
 
 fila_cierre <- ntr[as.character(fecha_valoracion)]
 
-if (NROW(fila_cierre) != 1) {
-  stop("Yahoo no devolvió un cierre de NTR para el 28/09/2026.")
-}
 
-cierre_yahoo <- as.numeric(Cl(fila_cierre))
-
-if (abs(cierre_yahoo - S0) > 0.05) {
-  warning(
-    "El cierre descargado de Yahoo difiere del 71.98 de la captura. ",
-    "Revisa la fecha y el precio antes de continuar."
-  )
-}
-
-# Guardamos los datos usados como respaldo de esta fecha de corte.
+# Guardar los datos usados como respaldo de esta fecha de corte.
 historico_ntr <- data.frame(
   fecha = as.Date(zoo::index(ntr)),
   close = as.numeric(Cl(ntr)),
@@ -91,25 +87,11 @@ write.csv(
 )
 ```
 
-```{r}
-# 4. Volatilidad histórica: 252 rendimientos diarios ----------------------
+## Obtener la Tasa libre de riesgo
 
-precios_ajustados <- historico_ntr$adjusted
-precios_ajustados <- precios_ajustados[
-  is.finite(precios_ajustados) & precios_ajustados > 0
-]
-
-if (length(precios_ajustados) < 253) {
-  stop("Se necesitan al menos 253 precios para obtener 252 rendimientos.")
-}
-
-rendimientos <- tail(diff(log(precios_ajustados)), 252)
-sigma <- sd(rendimientos) * sqrt(252)
-```
+Para nuestro caso utilizaremos la letra del tesoro a 3 meses
 
 ```{r}
-# 5. Tasa libre de riesgo: letra del Tesoro a 3 meses ---------------------
-
 dtb3 <- getSymbols(
   "DTB3",
   src = "FRED",
@@ -155,10 +137,27 @@ write.csv(
 
 ```
 
+## Cálculo de volatidad histórica
+
+Para uso de la valoración siendo el sigma
 
 ```{r}
-# 6. Tiempo hasta el vencimiento ------------------------------------------
+precios_ajustados <- historico_ntr$adjusted
+precios_ajustados <- precios_ajustados[
+  is.finite(precios_ajustados) & precios_ajustados > 0
+]
 
+if (length(precios_ajustados) < 253) {
+  stop("Se necesitan al menos 253 precios para obtener 252 rendimientos.")
+}
+
+rendimientos <- tail(diff(log(precios_ajustados)), 252)
+sigma <- sd(rendimientos) * sqrt(252)
+```
+
+##Tiempo hasta el vencimiento
+
+```{r}
 dias_vencimiento <- as.numeric(
   opcion$vencimiento - fecha_valoracion
 )
@@ -170,10 +169,45 @@ if (plazo_anios <= 0 || sigma <= 0) {
 }
 ```
 
+# (a) Los tres caminos.
+
+## Aparato
+
+### Fórmula cerrada de Black-Scholes
+
+Para valorar la opción se utiliza la fórmula cerrada de Black-Scholes presentada en **Björk, Proposición 7.13 (Black-Scholes Formula)**. Para una opción call europea con precio de ejercicio $K$ y vencimiento $T$, su valor en el instante $t$ está dado por:
+
+$$
+C(t,S_t)
+=
+S_tN(d_1)
+-
+Ke^{-r(T-t)}N(d_2),
+$$
+
+donde
+
+$$
+d_1
+=
+\frac{
+\ln(S_t/K)
++
+\left(r+\frac{1}{2}\sigma^2\right)(T-t)
+}{
+\sigma\sqrt{T-t}
+},
+$$
+
+$$
+d_2=d_1-\sigma\sqrt{T-t}.
+$$
+
+Aquí, $N(\cdot)$ representa la función de distribución acumulada de una normal estándar.
+
+Para aplicar la Proposición 7.13 se supone que la opción se trata como **europea y sin dividendos**, que la tasa libre de riesgo $r$ y la volatilidad $\sigma$ son constantes durante la vida de la opción, y que el precio del activo sigue la dinámica de Black-Scholes.
 
 ```{r}
-# 7. Fórmula cerrada de Björk: call europea sin dividendos ----------------
-
 precio_bs_call <- function(S, K, r, sigma, plazo) {
   d1 <- (
     log(S / K) + (r + sigma^2 / 2) * plazo
@@ -191,10 +225,69 @@ precio_bs_bjork <- precio_bs_call(
   sigma = sigma,
   plazo = plazo_anios
 )
+
+precio_bs_bjork
 ```
 
+## Capa de verificación
+
+Se realizaron chequeos sobre el resultado obtenido mediante la fórmula cerrada. Se verificó que el precio calculado fuera finito y que cumpliera las cotas de no arbitraje para una call europea:
+
+$$
+\max(S_0-Ke^{-rT},0)\leq C_0\leq S_0.
+$$
+
+Adicionalmente, se comparó el precio teórico con el intervalo *bid-ask* observado en el mercado. El precio obtenido mediante Black-Scholes fue de $4.6174$, mientras que el *bid* y el *ask* fueron $4.30$ y $4.80$, respectivamente, por lo que el valor teórico se encuentra dentro del intervalo observado.
+
 ```{r}
-# 8. Aproximación con el dividendo conocido -------------------------------
+
+limite_inferior <- max(S0 - opcion$strike * exp(-r * plazo_anios), 0)
+limite_superior <- S0
+
+chequeos <- data.frame(
+  Chequeo = c(
+    "Precio finito",
+    "Cota inferior de no arbitraje",
+    "Cota superior de no arbitraje",
+    "Precio dentro del bid-ask"
+  ),
+  Resultado = c(
+    is.finite(precio_bs_bjork),
+    precio_bs_bjork >= limite_inferior,
+    precio_bs_bjork <= limite_superior,
+    precio_bs_bjork >= opcion$bid & precio_bs_bjork <= opcion$ask
+  )
+)
+
+chequeos
+```
+
+## El supuesto que no se cumplió
+
+El supuesto de ausencia de dividendos no se sostiene para este caso concreto porque NTR tiene un dividendo de \$0.55 cuya fecha ex-dividendo es el 29/09/2026, dentro de la vida de la opción.
+
+Para incorporar el dividendo conocido en el modelo de Black-Scholes, se calcula primero su valor presente:
+
+$$
+PV(D)=\sum_{i=1}^{n}D_i e^{-rt_i}
+$$
+
+Luego, se obtiene un *dividend yield* continuo equivalente $q$, definido mediante:
+
+$$
+S_0e^{-qT}=S_0-PV(D)
+$$
+
+Despejando $q$:
+
+$$
+q=-\frac{1}{T}\ln\left(\frac{S_0-PV(D)}{S_0}\right)
+$$
+
+Para la opción seleccionada se tiene $S_0=71.98$ y un dividendo de $0.55$ USD por acción, con fecha ex-dividendo el 29 de septiembre de 2026. El valor de $q$ obtenido se utiliza posteriormente en la valoración mediante Black-Scholes.
+
+```{r}
+# 8. Dividend yield continuo equivalente -------------------------------
 
 dividendos <- data.frame(
   fecha_exdividendo = as.Date("2026-09-29"),
@@ -216,152 +309,126 @@ vp_dividendos <- sum(
   dividendos$monto_por_accion * exp(-r * tiempo_dividendos)
 )
 
-S_ajustado <- S0 - vp_dividendos
+q <- -(1 / plazo_anios) * log(
+  (S0 - vp_dividendos) / S0
+)
 
-if (S_ajustado <= 0) {
-  stop("El valor presente de dividendos supera el precio de la acción.")
+cat("Valor presente de dividendos:", vp_dividendos, "\n") #Casi el mismo porque solo vive un día
+cat("Dividend yield continuo (q):", q, "\n")
+
+```
+
+```{r}
+# Black-Scholes con dividend yield continuo 
+
+precio_bs_call_div <- function(S, K, r, q, sigma, plazo) {
+  
+  d1 <- (
+    log(S / K) + (r - q + sigma^2 / 2) * plazo
+  ) / (sigma * sqrt(plazo))
+  
+  d2 <- d1 - sigma * sqrt(plazo)
+  
+  S * exp(-q * plazo) * pnorm(d1) -
+    K * exp(-r * plazo) * pnorm(d2)
 }
 
-precio_bs_div_aprox <- precio_bs_call(
-  S = S_ajustado,
+
+precio_bs_div <- precio_bs_call_div(
+  S = S0,
   K = opcion$strike,
   r = r,
+  q = q,
   sigma = sigma,
   plazo = plazo_anios
 )
+
+precio_bs_div
 ```
 
+Al incorporar este rendimiento en Black-Scholes, el precio de la call cambia de
+
+$$
+C_{\text{sin dividendos}}=4.617382
+$$
+
+a
+
+$$
+C_{\text{con dividendos}}=4.327523.
+$$
+
+Al considerar el dividendo reduce el valor estimado de la call en aproximadamente \$0.29. No obstante, el precio corregido continúa dentro del intervalo bid-ask observado, $[4.30,4.80]$.
+
+
+## (b) La volatilidad
+
+## Aparato
+### Volatilidad histórica 
 
 ```{r}
-# 9. Resumen --------------------------------------------------------------
+fecha_inicio_vol <- fecha_valoracion -
+  as.numeric(opcion$vencimiento - fecha_valoracion)
 
-resultados <- data.frame(
-  metodo = c(
-    "Björk 7.13: sin dividendos",
-    "BS con ajuste por dividendo: aproximación"
-  ),
-  precio_teorico = c(precio_bs_bjork, precio_bs_div_aprox)
+precios_vol <- getSymbols(
+  "NTR",
+  src = "yahoo",
+  from = fecha_inicio_vol,
+  to = fecha_valoracion + 1,
+  auto.assign = FALSE
 )
 
-resultados$diferencia_con_medio <- (
-  resultados$precio_teorico - opcion$precio_medio
-)
+cierres <- Cl(precios_vol)
+cierres <- cierres[is.finite(cierres)]
 
-resultados$dentro_del_bid_ask <- (
-  resultados$precio_teorico >= opcion$bid &
-    resultados$precio_teorico <= opcion$ask
-)
+retornos_log <- diff(log(cierres))
+retornos_log <- retornos_log[is.finite(retornos_log)]
 
-cat("OPCIÓN ELEGIDA\n")
-print(opcion, row.names = FALSE)
+n_retornos <- length(retornos_log)
 
-cat("\nDATOS DEL MODELO\n")
-cat(sprintf("Cierre NTR de la captura: USD %.2f\n", S0))
-cat(sprintf("Cierre NTR descargado:  USD %.2f\n", cierre_yahoo))
-cat(sprintf("Vencimiento: %d días; T = %.6f años\n",
-            dias_vencimiento, plazo_anios))
-cat(sprintf("Volatilidad histórica: %.4f (%.2f%%)\n",
-            sigma, 100 * sigma))
-cat(sprintf("DTB3 utilizada: %.2f%%, fecha %s\n",
-            tasa_usada$tasa_descuento_pct,
-            as.character(tasa_usada$fecha)))
-cat(sprintf("Tasa continua r: %.4f (%.2f%%)\n",
-            r, 100 * r))
-cat(sprintf("Valor presente del dividendo: USD %.4f\n",
-            vp_dividendos))
+sigma_diaria <- sd(as.numeric(retornos_log))
 
-cat("\nVALORACIONES EN USD POR ACCIÓN\n")
-print(resultados, row.names = FALSE, digits = 4)
+sigma_historica <- sigma_diaria * sqrt(252)
+
+cat("Número de retornos:", n_retornos, "\n")
+cat("Volatilidad diaria:", sigma_diaria, "\n")
+cat("Volatilidad histórica anual:", sigma_historica, "\n")
+cat("Volatilidad histórica anual (%):",
+    sigma_historica * 100, "%\n")
 ```
-
+### Volatilidad implícita
 ```{r}
-d1 <- (log(S0 / opcion$strike) +
-         (r + sigma^2 / 2) * plazo_anios) /
-      (sigma * sqrt(plazo_anios))
-d2 <- d1 - sigma * sqrt(plazo_anios)
+precio_mercado <- (opcion$bid + opcion$ask) / 2
 
-cat(sprintf("d1 = %.6f; d2 = %.6f\n", d1, d2))
-```
-
-```{r}
-# Histórica con una ventana cercana al vencimiento
-n_corto <- round(plazo_anios * 252)
-todos_los_retornos <- diff(log(precios_ajustados))
-
-sigma_corta <- sd(tail(todos_los_retornos, n_corto)) * sqrt(252)
-sigma_252 <- sd(tail(todos_los_retornos, 252)) * sqrt(252)
-
-# Volatilidad implícita: hallar sigma que reproduce un precio observado
-vol_implicita <- function(precio_observado, spot_modelo) {
-  diferencia <- function(vol) {
-    precio_bs_call(
-      S = spot_modelo,
-      K = opcion$strike,
-      r = r,
-      sigma = vol,
-      plazo = plazo_anios
-    ) - precio_observado
-  }
-
-  uniroot(diferencia, interval = c(0.0001, 2))$root
+objetivo_sigma <- function(sigma) {
+  
+  precio_modelo <- precio_bs_call_div(
+    S = S0,
+    K = opcion$strike,
+    r = r,
+    q = q,
+    sigma = sigma,
+    plazo = plazo_anios
+  )
+  
+  precio_modelo - precio_mercado
 }
 
-# Inversión literal de la fórmula de Björk, sin dividendos
-iv_sin_div <- vol_implicita(opcion$precio_medio, S0)
+sigma_implicita <- uniroot(
+  objetivo_sigma,
+  interval = c(0.0001, 3)
+)$root
 
-# Inversión del modelo con el ajuste aproximado por dividendo
-iv_bid <- vol_implicita(opcion$bid, S_ajustado)
-iv_medio <- vol_implicita(opcion$precio_medio, S_ajustado)
-iv_ask <- vol_implicita(opcion$ask, S_ajustado)
-
-comparacion <- data.frame(
-  medida = c(
-    paste0("Histórica: ", n_corto, " rendimientos"),
-    "Histórica: 252 rendimientos",
-    "Implícita sin dividendos: precio medio",
-    "Implícita con ajuste: bid",
-    "Implícita con ajuste: precio medio",
-    "Implícita con ajuste: ask"
-  ),
-  volatilidad_pct = round(
-    100 * c(
-      sigma_corta, sigma_252, iv_sin_div,
-      iv_bid, iv_medio, iv_ask
-    ),
-    2
-  )
-)
-
-print(comparacion, row.names = FALSE)
+cat("Precio de mercado (mid):", precio_mercado, "\n")
+cat("Volatilidad implícita anual:", sigma_implicita, "\n")
+cat("Volatilidad implícita anual (%):",
+    sigma_implicita * 100, "%\n")
 ```
 
+## Capa de verificación
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+## El supuesto que no se cumplió
 
 
 
