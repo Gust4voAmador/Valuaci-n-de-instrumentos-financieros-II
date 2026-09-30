@@ -287,7 +287,7 @@ $$
 Para la opción seleccionada se tiene $S_0=71.98$ y un dividendo de $0.55$ USD por acción, con fecha ex-dividendo el 29 de septiembre de 2026. El valor de $q$ obtenido se utiliza posteriormente en la valoración mediante Black-Scholes.
 
 ```{r}
-# 8. Dividend yield continuo equivalente -------------------------------
+# Dividend yield continuo equivalente
 
 dividendos <- data.frame(
   fecha_exdividendo = as.Date("2026-09-29"),
@@ -424,15 +424,71 @@ cat("Volatilidad implícita anual:", sigma_implicita, "\n")
 cat("Volatilidad implícita anual (%):",
     sigma_implicita * 100, "%\n")
 ```
+Hecharse hablada de porque no dan iguales y compararlas claramente
+
+
 
 ## Capa de verificación
+```{r}
+# Se verifica que realmente se despejó bien la volatilidad implícita
+precio_con_sigma_implicita <- precio_bs_call_div(
+  S = S0,
+  K = opcion$strike,
+  r = r,
+  q = q,
+  sigma = sigma_implicita,
+  plazo = plazo_anios
+)
+
+cat("Precio de mercado:", precio_mercado, "\n")
+cat("Precio BS con sigma implícita:",
+    precio_con_sigma_implicita, "\n")
+cat("Error:",
+    precio_con_sigma_implicita - precio_mercado, "\n")
+```
+Eso demuestra numéricamente que encontraste correctamente la volatilidad implícita.
 
 
-## El supuesto que no se cumplió
 
+### El supuesto que no se cumplió
 
+El modelo de Black-Scholes supone una volatilidad $\sigma$ constante. Sin embargo,
+como señala Björk en la sección 7.8, en la práctica la volatilidad no permanece
+constante en el tiempo.
 
+Para analizar este supuesto se calcularon dos medidas. Primero, la volatilidad
+histórica a partir de los rendimientos logarítmicos de NTR:
 
+$$
+\hat{\sigma}_{hist}=S_{\xi}\sqrt{252}.
+$$
+
+Posteriormente, siguiendo la sección 7.8.2 de Björk, se obtuvo la volatilidad
+implícita de la opción resolviendo numéricamente:
+
+$$
+C_{BS}(\sigma_{imp})=C_{mercado}.
+$$
+
+Los valores obtenidos para $\sigma_{hist}$ y $\sigma_{imp}$ fueron diferentes.
+Esto indica que la volatilidad estimada a partir del comportamiento pasado del
+activo no coincide con la volatilidad que hace consistente el precio actual de
+mercado con el modelo de Black-Scholes.
+
+Por esta razón, para la valoración de la opción también se consideró la
+volatilidad implícita obtenida a partir de su precio de mercado.
+
+## Qué queda pendiente
+
+La comparación entre la volatilidad histórica y la volatilidad implícita de una
+sola opción no permite verificar por sí sola toda la estructura de volatilidad
+del mercado.
+
+Quedaría pendiente calcular las volatilidades implícitas de opciones con
+diferentes precios de ejercicio y vencimientos. Esto permitiría analizar si la
+volatilidad implícita cambia con el strike y estudiar la presencia de una
+sonrisa de volatilidad (*volatility smile*), como se discute en la sección
+7.8.2 de Björk.
 
 
 
