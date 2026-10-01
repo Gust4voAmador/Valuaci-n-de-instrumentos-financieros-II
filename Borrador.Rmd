@@ -360,6 +360,884 @@ $$
 
 Al considerar el dividendo reduce el valor estimado de la call en aproximadamente \$0.29. No obstante, el precio corregido continúa dentro del intervalo bid-ask observado, $[4.30,4.80]$.
 
+## Aparato
+
+### La EDP de Black-Scholes resuelta hacia atrás
+
+Como segundo método de valoración se utiliza la ecuación diferencial parcial de Black-Scholes presentada en **Björk, Teorema 7.10**. Para una opción europea cuyo valor se denota por $V(t,S)$, la EDP sin dividendos es
+
+$$
+\frac{\partial V}{\partial t}
++
+rS\frac{\partial V}{\partial S}
++
+\frac{1}{2}\sigma^2S^2
+\frac{\partial^2V}{\partial S^2}
+-rV
+=
+0.
+$$
+
+Para una opción call europea, la condición terminal al vencimiento es
+
+$$
+V(T,S)=\max(S-K,0).
+$$
+
+A diferencia de la fórmula cerrada de Black-Scholes, en este método el precio de la opción se obtiene resolviendo la EDP **hacia atrás**, partiendo del payoff conocido al vencimiento $T$ y retrocediendo hasta el instante de valoración.
+
+Para obtener una solución numérica se utiliza el método de diferencias finitas de **Crank-Nicolson**. Se construye una malla para el precio del activo y para el tiempo:
+
+$$
+S_i=i\Delta S,
+$$
+
+$$
+t_n=n\Delta t,
+$$
+
+donde
+
+$$
+\Delta S=\frac{S_{\max}}{M},
+$$
+
+y
+
+$$
+\Delta t=\frac{T}{N}.
+$$
+
+Crank-Nicolson utiliza un promedio de las aproximaciones de la EDP en dos niveles temporales consecutivos. En cada paso se obtiene un sistema lineal tridiagonal, el cual se resuelve para encontrar el valor de la opción en el instante inmediatamente anterior.
+
+```{r}
+pde_price <- function(S, K, r, sigma, Tt,
+                      q = 0,
+                      type = c("call", "put"),
+                      Smax_mult = 4,
+                      M = 200,
+                      N = 2000) {
+  
+  type <- match.arg(type)
+  
+  if (any(!is.finite(c(S, K, r, sigma, Tt, q, Smax_mult))) ||
+      S <= 0 || K <= 0 || sigma <= 0 || Tt < 0) {
+    stop("Revise S, K, r, sigma, Tt y q.")
+  }
+  
+  if (Tt == 0) {
+    return(
+      if (type == "call") {
+        max(S - K, 0)
+      } else {
+        max(K - S, 0)
+      }
+    )
+  }
+  
+  if (M < 3 || N < 1 ||
+      M != as.integer(M) ||
+      N != as.integer(N) ||
+      Smax_mult <= 1) {
+    stop("Se requiere M >= 3, N >= 1 y Smax_mult > 1.")
+  }
+  
+  
+  # Resuelve un sistema tridiagonal mediante el algoritmo de Thomas
+  
+  resolver_tridiagonal <- function(inferior, diagonal, superior, rhs) {
+    
+    n <- length(diagonal)
+    
+    c_mod <- numeric(n - 1)
+    d_mod <- numeric(n)
+    
+    c_mod[1] <- superior[1] / diagonal[1]
+    d_mod[1] <- rhs[1] / diagonal[1]
+    
+    for (j in 2:n) {
+      
+      pivote <- diagonal[j] -
+        inferior[j - 1] * c_mod[j - 1]
+      
+      if (!is.finite(pivote) || abs(pivote) < 1e-14) {
+        stop("El sistema numerico tiene un pivote invalido.")
+      }
+      
+      if (j < n) {
+        c_mod[j] <- superior[j] / pivote
+      }
+      
+      d_mod[j] <- (
+        rhs[j] -
+          inferior[j - 1] * d_mod[j - 1]
+      ) / pivote
+    }
+    
+    x <- numeric(n)
+    x[n] <- d_mod[n]
+    
+    for (j in (n - 1):1) {
+      x[j] <- d_mod[j] - c_mod[j] * x[j + 1]
+    }
+    
+    x
+  }
+  
+  
+  # Construccion de la malla
+  
+  Smax <- Smax_mult * max(S, K)
+  dS <- Smax / M
+  dt <- Tt / N
+  
+  Svec <- (0:M) * dS
+  
+  
+  # Condicion terminal:
+  # valor de la opcion al vencimiento
+  
+  V <- if (type == "call") {
+    pmax(Svec - K, 0)
+  } else {
+    pmax(K - Svec, 0)
+  }
+  
+  
+  # Nodos interiores
+  
+  i <- 1:(M - 1)
+  
+  
+  # Coeficientes de Crank-Nicolson
+  
+  a <- 0.25 * dt *
+    (sigma^2 * i^2 - (r - q) * i)
+  
+  b <- -0.5 * dt *
+    (sigma^2 * i^2 + r)
+  
+  c <- 0.25 * dt *
+    (sigma^2 * i^2 + (r - q) * i)
+  
+  
+  m <- M - 1
+  
+  inferior <- -a[2:m]
+  diagonal <- 1 - b
+  superior <- -c[1:(m - 1)]
+  
+  
+  # Se parte del payoff en T y se retrocede
+  # hasta obtener el valor de la opcion hoy
+  
+  for (paso in 1:N) {
+    
+    tau_nuevo <- paso * dt
+    
+    
+    # Condiciones de frontera
+    
+    if (type == "call") {
+      
+      borde_izq <- 0
+      
+      borde_der <- Smax * exp(-q * tau_nuevo) -
+        K * exp(-r * tau_nuevo)
+      
+    } else {
+      
+      borde_izq <- K * exp(-r * tau_nuevo)
+      borde_der <- 0
+    }
+    
+    
+    interior <- V[2:M]
+    
+    
+    # Lado derecho del sistema de Crank-Nicolson
+    
+    rhs <- (1 + b) * interior
+    
+    rhs[2:m] <- rhs[2:m] +
+      a[2:m] * interior[1:(m - 1)]
+    
+    rhs[1:(m - 1)] <- rhs[1:(m - 1)] +
+      c[1:(m - 1)] * interior[2:m]
+    
+    
+    # Incorporacion de condiciones de frontera
+    
+    rhs[1] <- rhs[1] +
+      a[1] * (V[1] + borde_izq)
+    
+    rhs[m] <- rhs[m] +
+      c[m] * (V[M + 1] + borde_der)
+    
+    
+    # Resolucion del sistema tridiagonal
+    
+    V[2:M] <- resolver_tridiagonal(
+      inferior,
+      diagonal,
+      superior,
+      rhs
+    )
+    
+    
+    V[1] <- borde_izq
+    V[M + 1] <- borde_der
+  }
+  
+  
+  # Interpolacion en el precio observado S
+  
+  approx(
+    x = Svec,
+    y = V,
+    xout = S
+  )$y
+}
+```
+
+Primero se valora la opción manteniendo el supuesto de ausencia de dividendos, es decir, tomando $q=0$.
+
+```{r}
+precio_edp_bjork <- pde_price(
+  S = S0,
+  K = opcion$strike,
+  r = r,
+  sigma = sigma,
+  Tt = plazo_anios,
+  q = 0,
+  type = "call",
+  Smax_mult = 4,
+  M = 200,
+  N = 2000
+)
+
+precio_edp_bjork
+```
+
+## Capa de verificación
+
+Como primera verificación se comprueba que el precio obtenido sea finito y que satisfaga las cotas de no arbitraje para una call europea sin dividendos:
+
+$$
+\max(S_0-Ke^{-rT},0)
+\leq C_0
+\leq S_0.
+$$
+
+Además, dado que la fórmula cerrada de Black-Scholes y la EDP resuelven el mismo problema bajo los mismos supuestos, se compara el resultado de ambos métodos.
+
+```{r}
+limite_inferior_edp <- max(
+  S0 - opcion$strike * exp(-r * plazo_anios),
+  0
+)
+
+limite_superior_edp <- S0
+
+diferencia_edp_bs <- abs(
+  precio_edp_bjork - precio_bs_bjork
+)
+
+chequeos_edp <- data.frame(
+  Chequeo = c(
+    "Precio finito",
+    "Cota inferior de no arbitraje",
+    "Cota superior de no arbitraje",
+    "Cercania con Black-Scholes",
+    "Precio dentro del bid-ask"
+  ),
+  Resultado = c(
+    is.finite(precio_edp_bjork),
+    precio_edp_bjork >= limite_inferior_edp,
+    precio_edp_bjork <= limite_superior_edp,
+    diferencia_edp_bs < 0.05,
+    precio_edp_bjork >= opcion$bid &
+      precio_edp_bjork <= opcion$ask
+  )
+)
+
+chequeos_edp
+
+cat(
+  "Diferencia absoluta EDP vs Black-Scholes:",
+  diferencia_edp_bs,
+  "\n"
+)
+```
+
+También se realiza una comprobación de estabilidad numérica aumentando el número de intervalos espaciales y temporales. Si el resultado cambia poco al refinar la malla, esto indica que la discretización utilizada es suficientemente fina.
+
+```{r}
+precio_edp_fino <- pde_price(
+  S = S0,
+  K = opcion$strike,
+  r = r,
+  sigma = sigma,
+  Tt = plazo_anios,
+  q = 0,
+  type = "call",
+  Smax_mult = 4,
+  M = 400,
+  N = 4000
+)
+
+cat(
+  "EDP M = 200, N = 2000:",
+  precio_edp_bjork,
+  "\n"
+)
+
+cat(
+  "EDP M = 400, N = 4000:",
+  precio_edp_fino,
+  "\n"
+)
+
+cat(
+  "Diferencia por refinamiento:",
+  abs(precio_edp_bjork - precio_edp_fino),
+  "\n"
+)
+```
+
+## El supuesto que no se cumplió
+
+La primera valoración mediante la EDP supone, al igual que la fórmula cerrada de Black-Scholes utilizada anteriormente, que el activo no paga dividendos.
+
+Sin embargo, NTR tiene un dividendo de \$0.55 con fecha ex-dividendo dentro de la vida de la opción. Para mantener la misma formulación utilizada en los tres métodos se emplea el rendimiento continuo equivalente $q$ calculado anteriormente.
+
+Con dividendos, la EDP se modifica a
+
+$$
+\frac{\partial V}{\partial t}
++
+(r-q)S\frac{\partial V}{\partial S}
++
+\frac{1}{2}\sigma^2S^2
+\frac{\partial^2V}{\partial S^2}
+-rV
+=
+0.
+$$
+
+Por tanto, la principal modificación consiste en que el término
+
+$$
+rS\frac{\partial V}{\partial S}
+$$
+
+pasa a ser
+
+$$
+(r-q)S\frac{\partial V}{\partial S}.
+$$
+
+Para una call, también se modifica la condición de frontera cuando el precio del activo es suficientemente grande. Sin dividendos se utiliza
+
+$$
+S-Ke^{-r(T-t)},
+$$
+
+mientras que con dividendos se emplea
+
+$$
+Se^{-q(T-t)}
+-
+Ke^{-r(T-t)}.
+$$
+
+```{r}
+precio_edp_div <- pde_price(
+  S = S0,
+  K = opcion$strike,
+  r = r,
+  sigma = sigma,
+  Tt = plazo_anios,
+  q = q,
+  type = "call",
+  Smax_mult = 4,
+  M = 200,
+  N = 2000
+)
+
+precio_edp_div
+
+cat(
+  "EDP sin dividendos:",
+  precio_edp_bjork,
+  "\n"
+)
+
+cat(
+  "EDP con dividendos:",
+  precio_edp_div,
+  "\n"
+)
+
+cat(
+  "Cambio por dividendos:",
+  precio_edp_div - precio_edp_bjork,
+  "\n"
+)
+```
+
+Para una call europea con rendimiento continuo por dividendos, las cotas de no arbitraje utilizadas son
+
+$$
+\max
+\left(
+S_0e^{-qT}-Ke^{-rT},
+0
+\right)
+\leq C_0
+\leq
+S_0e^{-qT}.
+$$
+
+```{r}
+limite_inferior_edp_div <- max(
+  S0 * exp(-q * plazo_anios) -
+    opcion$strike * exp(-r * plazo_anios),
+  0
+)
+
+limite_superior_edp_div <- S0 * exp(-q * plazo_anios)
+
+chequeos_edp_div <- data.frame(
+  Chequeo = c(
+    "Precio finito",
+    "Cota inferior con dividendos",
+    "Cota superior con dividendos",
+    "Precio dentro del bid-ask"
+  ),
+  Resultado = c(
+    is.finite(precio_edp_div),
+    precio_edp_div >= limite_inferior_edp_div,
+    precio_edp_div <= limite_superior_edp_div,
+    precio_edp_div >= opcion$bid &
+      precio_edp_div <= opcion$ask
+  )
+)
+
+chequeos_edp_div
+```
+
+La incorporación del dividendo no modifica el método numérico utilizado. La EDP continúa resolviéndose mediante Crank-Nicolson; lo que cambia es la ecuación que se resuelve al incorporar el rendimiento por dividendos $q$.
+
+---
+
+## Aparato
+
+### Monte Carlo bajo $Q$
+
+Como tercer método se utiliza la representación neutral al riesgo de **Björk, Teorema 7.11**. Bajo la medida neutral al riesgo $Q$, el valor de una opción europea puede expresarse como el valor esperado descontado de su payoff:
+
+$$
+V_0
+=
+E^Q
+\left[
+e^{-rT}\Phi(S_T)
+\right].
+$$
+
+Para una opción call europea,
+
+$$
+\Phi(S_T)=\max(S_T-K,0),
+$$
+
+por lo que
+
+$$
+C_0
+=
+e^{-rT}
+E^Q
+\left[
+\max(S_T-K,0)
+\right].
+$$
+
+Sin dividendos, bajo la medida neutral al riesgo el precio terminal del activo se modela mediante
+
+$$
+S_T
+=
+S_0
+\exp
+\left[
+\left(
+r-\frac{1}{2}\sigma^2
+\right)T
++
+\sigma\sqrt{T}Z
+\right],
+$$
+
+donde
+
+$$
+Z\sim N(0,1).
+$$
+
+El estimador Monte Carlo del precio de la opción es entonces
+
+$$
+\widehat C_0
+=
+\frac{1}{n}
+\sum_{j=1}^{n}
+e^{-rT}
+\max
+\left(
+S_T^{(j)}-K,
+0
+\right).
+$$
+
+```{r}
+mc_price <- function(S, K, r, sigma, Tt,
+                     q = 0,
+                     type = c("call", "put"),
+                     nsim = 200000,
+                     seed = 20260924) {
+  
+  type <- match.arg(type)
+  
+  set.seed(seed)
+  
+  Z <- rnorm(nsim)
+  
+  ST <- S * exp(
+    (r - q - 0.5 * sigma^2) * Tt +
+      sigma * sqrt(Tt) * Z
+  )
+  
+  payoff <- if (type == "call") {
+    pmax(ST - K, 0)
+  } else {
+    pmax(K - ST, 0)
+  }
+  
+  payoff_desc <- exp(-r * Tt) * payoff
+  
+  precio <- mean(payoff_desc)
+  
+  se <- sd(payoff_desc) / sqrt(nsim)
+  
+  ic95 <- precio + c(-1, 1) * 1.96 * se
+  
+  list(
+    precio = precio,
+    se = se,
+    ic95 = ic95
+  )
+}
+```
+
+La primera estimación se realiza nuevamente bajo el supuesto de ausencia de dividendos.
+
+```{r}
+resultado_mc_bjork <- mc_price(
+  S = S0,
+  K = opcion$strike,
+  r = r,
+  sigma = sigma,
+  Tt = plazo_anios,
+  q = 0,
+  type = "call",
+  nsim = 200000,
+  seed = 20260924
+)
+
+precio_mc_bjork <- resultado_mc_bjork$precio
+
+resultado_mc_bjork
+```
+
+Debido a que Monte Carlo utiliza una cantidad finita de simulaciones, el resultado presenta error de muestreo.
+
+El error estándar se calcula mediante
+
+$$
+SE
+=
+\frac{s}{\sqrt{n}},
+$$
+
+donde $s$ es la desviación estándar de los payoffs descontados.
+
+A partir de este error estándar se construye un intervalo de confianza aproximado del 95%:
+
+$$
+\widehat C_0
+\pm
+1.96SE.
+$$
+
+## Capa de verificación
+
+Se verifica que el precio estimado sea finito, que el error estándar sea positivo y que el valor obtenido respete las cotas de no arbitraje.
+
+Además, se comprueba si el valor de Black-Scholes se encuentra dentro del intervalo de confianza del 95% obtenido mediante Monte Carlo. Debido a que ambos procedimientos están valorando la misma opción bajo el mismo modelo, sus resultados deberían ser consistentes salvo por el error de simulación.
+
+```{r}
+chequeos_mc <- data.frame(
+  Chequeo = c(
+    "Precio finito",
+    "Error estandar finito",
+    "Error estandar positivo",
+    "Cota inferior de no arbitraje",
+    "Cota superior de no arbitraje",
+    "Black-Scholes dentro del IC 95%",
+    "Precio MC dentro del bid-ask"
+  ),
+  Resultado = c(
+    is.finite(resultado_mc_bjork$precio),
+    is.finite(resultado_mc_bjork$se),
+    resultado_mc_bjork$se > 0,
+    resultado_mc_bjork$precio >= limite_inferior_edp,
+    resultado_mc_bjork$precio <= limite_superior_edp,
+    precio_bs_bjork >= resultado_mc_bjork$ic95[1] &
+      precio_bs_bjork <= resultado_mc_bjork$ic95[2],
+    resultado_mc_bjork$precio >= opcion$bid &
+      resultado_mc_bjork$precio <= opcion$ask
+  )
+)
+
+chequeos_mc
+
+cat(
+  "Precio Monte Carlo:",
+  resultado_mc_bjork$precio,
+  "\n"
+)
+
+cat(
+  "Error estandar:",
+  resultado_mc_bjork$se,
+  "\n"
+)
+
+cat(
+  "IC 95%:",
+  resultado_mc_bjork$ic95[1],
+  resultado_mc_bjork$ic95[2],
+  "\n"
+)
+```
+
+Como comprobación adicional se aumenta el número de simulaciones. El error estándar de Monte Carlo debería disminuir aproximadamente en proporción a
+
+$$
+\frac{1}{\sqrt{n}}.
+$$
+
+```{r}
+resultado_mc_grande <- mc_price(
+  S = S0,
+  K = opcion$strike,
+  r = r,
+  sigma = sigma,
+  Tt = plazo_anios,
+  q = 0,
+  type = "call",
+  nsim = 500000,
+  seed = 20260924
+)
+
+cat(
+  "SE con 200000 simulaciones:",
+  resultado_mc_bjork$se,
+  "\n"
+)
+
+cat(
+  "SE con 500000 simulaciones:",
+  resultado_mc_grande$se,
+  "\n"
+)
+```
+
+## El supuesto que no se cumplió
+
+La simulación anterior supone que NTR no paga dividendos. Bajo ese supuesto, la deriva del activo bajo la medida neutral al riesgo es $r$.
+
+Al incorporar un rendimiento continuo por dividendos $q$, la dinámica bajo $Q$ pasa a ser
+
+$$
+dS_t
+=
+(r-q)S_t\,dt
++
+\sigma S_t\,dW_t^Q.
+$$
+
+Por tanto, el precio terminal simulado pasa de
+
+$$
+S_T
+=
+S_0
+\exp
+\left[
+\left(
+r-\frac{\sigma^2}{2}
+\right)T
++
+\sigma\sqrt{T}Z
+\right]
+$$
+
+a
+
+$$
+S_T
+=
+S_0
+\exp
+\left[
+\left(
+r-q-\frac{\sigma^2}{2}
+\right)T
++
+\sigma\sqrt{T}Z
+\right].
+$$
+
+El factor utilizado para descontar el payoff no cambia. El precio continúa calculándose mediante
+
+$$
+C_0
+=
+e^{-rT}
+E^Q
+\left[
+\max(S_T-K,0)
+\right].
+$$
+
+Por lo tanto, $q$ modifica la evolución del activo bajo la medida neutral al riesgo, mientras que $r$ continúa siendo la tasa utilizada para descontar el payoff.
+
+```{r}
+resultado_mc_div <- mc_price(
+  S = S0,
+  K = opcion$strike,
+  r = r,
+  sigma = sigma,
+  Tt = plazo_anios,
+  q = q,
+  type = "call",
+  nsim = 200000,
+  seed = 20260924
+)
+
+precio_mc_div <- resultado_mc_div$precio
+
+resultado_mc_div
+
+cat(
+  "Monte Carlo sin dividendos:",
+  precio_mc_bjork,
+  "\n"
+)
+
+cat(
+  "Monte Carlo con dividendos:",
+  precio_mc_div,
+  "\n"
+)
+
+cat(
+  "Cambio por dividendos:",
+  precio_mc_div - precio_mc_bjork,
+  "\n"
+)
+```
+
+Se comprueba nuevamente que el precio con dividendos satisfaga las cotas de no arbitraje correspondientes y que el resultado de Black-Scholes con dividendos se encuentre dentro del intervalo de confianza de Monte Carlo.
+
+```{r}
+chequeos_mc_div <- data.frame(
+  Chequeo = c(
+    "Precio finito",
+    "Error estandar finito",
+    "Error estandar positivo",
+    "Cota inferior con dividendos",
+    "Cota superior con dividendos",
+    "Black-Scholes con dividendos dentro del IC 95%",
+    "Precio MC dentro del bid-ask"
+  ),
+  Resultado = c(
+    is.finite(resultado_mc_div$precio),
+    is.finite(resultado_mc_div$se),
+    resultado_mc_div$se > 0,
+    resultado_mc_div$precio >= limite_inferior_edp_div,
+    resultado_mc_div$precio <= limite_superior_edp_div,
+    precio_bs_div >= resultado_mc_div$ic95[1] &
+      precio_bs_div <= resultado_mc_div$ic95[2],
+    resultado_mc_div$precio >= opcion$bid &
+      resultado_mc_div$precio <= opcion$ask
+  )
+)
+
+chequeos_mc_div
+```
+
+---
+
+## Comparación de los tres caminos
+
+Finalmente, se comparan los precios obtenidos mediante los tres procedimientos: fórmula cerrada de Black-Scholes, solución numérica de la EDP mediante Crank-Nicolson y simulación Monte Carlo bajo la medida neutral al riesgo $Q$.
+
+```{r}
+comparacion_tres_caminos <- data.frame(
+  Metodo = c(
+    "Black-Scholes cerrado",
+    "EDP - Crank-Nicolson",
+    "Monte Carlo bajo Q"
+  ),
+  
+  Sin_dividendos = c(
+    precio_bs_bjork,
+    precio_edp_bjork,
+    precio_mc_bjork
+  ),
+  
+  Con_dividendos = c(
+    precio_bs_div,
+    precio_edp_div,
+    precio_mc_div
+  )
+)
+
+comparacion_tres_caminos
+```
+
+Para Monte Carlo también se reporta el error estándar y el intervalo de confianza del 95%.
+
+```{r}
+resultado_mc_resumen <- data.frame(
+  Precio = resultado_mc_div$precio,
+  Error_estandar = resultado_mc_div$se,
+  IC95_inferior = resultado_mc_div$ic95[1],
+  IC95_superior = resultado_mc_div$ic95[2]
+)
+
+resultado_mc_resumen
+```
+
+Los tres métodos incorporan el mismo rendimiento por dividendos $q$, pero lo hacen desde representaciones diferentes del mismo modelo. En la fórmula cerrada de Black-Scholes aparece el término $S_0e^{-qT}$ y la deriva $r-q$ dentro de $d_1$; en la EDP el término $rS V_S$ se sustituye por $(r-q)S V_S$; y en Monte Carlo la deriva neutral al riesgo del precio del activo pasa de $r$ a $r-q$.
+
+Los tres procedimientos continúan suponiendo que la opción es **europea**. La incorporación de $q$ corrige el supuesto de ausencia de dividendos, pero no introduce la posibilidad de ejercicio anticipado.
+
+
 
 ## (b) La volatilidad
 
@@ -499,24 +1377,95 @@ contrato = c(
 "NTR261218C00067500",
 "NTR261218C00070000",
 "NTR261218C00072500",
+"NTR261218C00075000",
 "NTR261218P00067500",
 "NTR261218P00070000",
 "NTR261218P00072500",
 "NTR261218P00075000"
 ),
-tipo = c("Call","Call","Call","Put","Put","Put","Put"),
-strike = c(67.5,70.0,72.5,67.5,70.0,72.5,75.0),
-precio = c(7.05,6.49,3.90,2.50,3.60,4.90,5.02),
-bid = c(7.20,5.70,4.30,3.40,4.30,5.60,7.50),
-ask = c(6.10,4.50,3.50,2.40,3.60,4.90,6.30),
-vencimiento = as.Date(rep("2026-12-18", 7)),
-volumen = c(61,2,1,1,3,2,3),
-open_interest = c(163,172,86,34,239,66,33))
+
+tipo = c("Call","Call","Call","Call","Put","Put","Put","Put"),
+strike = c(67.5,70.0,72.5,75.0,67.5,70.0,72.5,75.0),
+precio = c(7.05,6.49,3.90,3.20,2.50,3.60,4.90,5.02),
+
+bid = c(7.20,5.70,4.30,0.00,3.40,4.30,5.60,7.50),
+ask = c(6.10,4.50,3.50,0.00,2.40,3.60,4.90,6.30),
+vencimiento = as.Date(rep("2026-12-18", 8)),
+volumen = c(61,2,1,1,1,3,2,3),
+open_interest = c(163,172,86,NA,34,239,66,33))
+
 opciones
 ```
 
 ```{r}
+## -----------------------------------------------------------------------------
+## Datos
+## -----------------------------------------------------------------------------
+cadena_opciones <- opciones   # la función usa este nombre
 
+opcion_trabajo <- list(vencimiento = as.Date("2026-12-18"))
+
+## Parámetros: ajústalos a tu captura
+S_CAPTURA     <- 70                      # <-- precio spot de NTR al momento de la captura
+fecha_captura <- as.Date("2026-09-30")   # <-- fecha de la captura
+r  <- 0.04                               # <-- tasa libre de riesgo (continua)
+q  <- 0.0                                # <-- dividendo continuo
+Tt <- as.numeric(opcion_trabajo$vencimiento - fecha_captura) / 365
+
+## -----------------------------------------------------------------------------
+## Paridad put-call
+## -----------------------------------------------------------------------------
+parity_check <- function(call_bid, call_ask, put_bid, put_ask, S, K, r, Tt, q) {
+  # Normaliza por si bid/ask vienen invertidos
+  cb <- pmin(call_bid, call_ask); ca <- pmax(call_bid, call_ask)
+  pb <- pmin(put_bid,  put_ask);  pa <- pmax(put_bid,  put_ask)
+
+  call_mid <- (cb + ca) / 2
+  put_mid  <- (pb + pa) / 2
+
+  lhs   <- call_mid - put_mid
+  rhs   <- S * exp(-q * Tt) - K * exp(-r * Tt)
+  brecha     <- lhs - rhs
+  brecha_abs <- abs(brecha)
+
+  banda_bidask <- ((ca - cb) + (pa - pb)) / 2
+
+  explicada_bidask <- pmin(brecha_abs, banda_bidask)
+  no_explicada     <- pmax(brecha_abs - banda_bidask, 0)
+
+  porcentaje_explicado <- ifelse(brecha_abs == 0, 100,
+                                 100 * explicada_bidask / brecha_abs)
+
+  data.frame(strike = K, lhs = lhs, rhs = rhs, brecha = brecha,
+             banda_bidask = banda_bidask,
+             no_explicada = no_explicada,
+             porcentaje_explicado = porcentaje_explicado)
+}
+
+## -----------------------------------------------------------------------------
+## Emparejar calls y puts (solo con cotización válida)
+## -----------------------------------------------------------------------------
+cotizadas <- subset(cadena_opciones,
+                    vencimiento == opcion_trabajo$vencimiento &
+                    bid > 0 & ask > 0)
+
+pares <- merge(
+  subset(cotizadas, tipo == "Call", select = c(strike, bid, ask)),
+  subset(cotizadas, tipo == "Put",  select = c(strike, bid, ask)),
+  by = "strike", suffixes = c("_call", "_put")
+)
+
+if (nrow(pares) == 0) {
+  cat("\n--- (c) Paridad put-call: sin pares call/put para este vencimiento. ---\n")
+} else {
+  resultados_paridad <- do.call(rbind, lapply(seq_len(nrow(pares)), function(i) {
+    parity_check(pares$bid_call[i], pares$ask_call[i],
+                 pares$bid_put[i],  pares$ask_put[i],
+                 S_CAPTURA, pares$strike[i], r, Tt, q)
+  }))
+  cat("\n--- (c) Paridad put-call (strikes con call y put cotizados) ---\n")
+  print(resultados_paridad, digits = 5)
+}
 ```
 
 =======
