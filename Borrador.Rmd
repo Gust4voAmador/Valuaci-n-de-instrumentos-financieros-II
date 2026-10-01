@@ -491,6 +491,7 @@ sonrisa de volatilidad (*volatility smile*), como se discute en la sección
 7.8.2 de Björk.
 
 
+<<<<<<< HEAD
 ## (c)  La paridad, con datos reales
 
 Para los datos a utilizar:
@@ -519,4 +520,260 @@ opciones
 ```{r}
 
 ```
+=======
+# (d) Una delta-cobertura hacia atrás
+
+## Aparato
+
+Se simula la venta de una unidad de la call seleccionada al cierre de la
+primera de las últimas veinte sesiones disponibles. La cobertura sigue
+**Björk, sección 10.4, Ejemplo 10.6 y Proposición 10.7 (pp. 144–146)**:
+comprar delta unidades de la acción y financiar la diferencia mediante
+una cuenta de efectivo. La proposición se refiere al rebalanceo
+continuo; aquí se implementa una aproximación diaria.
+
+Se conserva la aproximación europea con dividend yield continuo de la
+valoración anterior (Björk, sección 16.2.1). Para cada fecha, con plazo
+restante $\tau_i$:
+
+$$
+\Delta_i=e^{-q\tau_i}N(d_{1,i}),\qquad
+B_0=C_0-\Delta_0S_0.
+$$
+
+Antes de rebalancear, el efectivo acumula intereses y el ingreso por
+dividendos del modelo continuo, aproximado con el precio al inicio de
+cada intervalo:
+
+$$
+B_i^-=B_{i-1}e^{r\delta t_i}
+ +\Delta_{i-1}qS_{i-1}\delta t_i.
+$$
+
+La compra o venta de acciones se paga desde esa misma cuenta, sin
+aportes externos:
+
+$$
+B_i=B_i^--(\Delta_i-\Delta_{i-1})S_i,
+\qquad V_i=\Delta_iS_i+B_i,
+\qquad E_i=V_i-C_i.
+$$
+
+$E_i$ es el error acumulado hasta la fecha $i$: activo de cobertura
+menos obligación por la call vendida. No se suman los niveles diarios de
+$E_i$. Al terminar la ventana, la opción sigue viva y se compara contra
+su valor teórico, no contra el payoff.
+
+```{r}
+# Últimos veinte cierres observados: veinte fechas y diecinueve intervalos.
+historia_cobertura <- historico_ntr[
+  historico_ntr$fecha <= fecha_valoracion &
+    is.finite(historico_ntr$close) & historico_ntr$close > 0,
+]
+historia_cobertura <- historia_cobertura[
+  order(historia_cobertura$fecha),
+]
+
+if (nrow(historia_cobertura) < 20) {
+  stop("No hay veinte sesiones disponibles para la cobertura.")
+}
+
+cobertura <- tail(historia_cobertura, 20)
+rownames(cobertura) <- NULL
+fecha_inicio_cobertura <- cobertura$fecha[1]
+
+# Estimar sigma únicamente con datos disponibles al iniciar la cobertura.
+precios_antes <- historico_ntr$adjusted[
+  historico_ntr$fecha <= fecha_inicio_cobertura &
+    is.finite(historico_ntr$adjusted) & historico_ntr$adjusted > 0
+]
+if (length(precios_antes) < 253) {
+  stop("Faltan precios anteriores para estimar sigma al inicio.")
+}
+sigma_cobertura <- sd(tail(diff(log(precios_antes)), 252)) * sqrt(252)
+
+# r y q se mantienen como escenarios constantes de la valoración anterior.
+# No se dispone aquí de una calibración histórica de r y q al inicio.
+r_cobertura <- r
+q_cobertura <- q
+
+cobertura$plazo <- as.numeric(opcion$vencimiento - cobertura$fecha) / 365
+if (any(cobertura$plazo <= 0) || !is.finite(sigma_cobertura) ||
+    sigma_cobertura <= 0) {
+  stop("Revisar vencimiento y volatilidad de la cobertura.")
+}
+
+cobertura$precio_call <- precio_bs_call_div(
+  S = cobertura$close,
+  K = opcion$strike,
+  r = r_cobertura,
+  q = q_cobertura,
+  sigma = sigma_cobertura,
+  plazo = cobertura$plazo
+)
+
+delta_bs_call_div <- function(S, K, r, q, sigma, plazo) {
+  d1 <- (log(S / K) + (r - q + sigma^2 / 2) * plazo) /
+    (sigma * sqrt(plazo))
+  exp(-q * plazo) * pnorm(d1)
+}
+
+cobertura$delta <- delta_bs_call_div(
+  S = cobertura$close,
+  K = opcion$strike,
+  r = r_cobertura,
+  q = q_cobertura,
+  sigma = sigma_cobertura,
+  plazo = cobertura$plazo
+)
+
+# Prima inicial teórica: no hay bid/ask histórico de la primera sesión.
+prima_inicial <- cobertura$precio_call[1]
+n_dias <- nrow(cobertura)
+cobertura$dt <- c(0, as.numeric(diff(cobertura$fecha)) / 365)
+cobertura$intereses <- numeric(n_dias)
+cobertura$dividendos_modelo <- numeric(n_dias)
+cobertura$compra_acciones <- numeric(n_dias)
+cobertura$efectivo <- numeric(n_dias)
+cobertura$valor_cartera <- numeric(n_dias)
+
+cobertura$compra_acciones[1] <- cobertura$delta[1] * cobertura$close[1]
+cobertura$efectivo[1] <- prima_inicial - cobertura$compra_acciones[1]
+cobertura$valor_cartera[1] <- prima_inicial
+
+for (i in 2:n_dias) {
+  cobertura$intereses[i] <- cobertura$efectivo[i - 1] *
+    expm1(r_cobertura * cobertura$dt[i])
+
+  # Flujo aproximado del yield continuo; no es un dividendo real pagado.
+  cobertura$dividendos_modelo[i] <- cobertura$delta[i - 1] *
+    q_cobertura * cobertura$close[i - 1] * cobertura$dt[i]
+
+  efectivo_antes <- cobertura$efectivo[i - 1] +
+    cobertura$intereses[i] + cobertura$dividendos_modelo[i]
+
+  cobertura$compra_acciones[i] <-
+    (cobertura$delta[i] - cobertura$delta[i - 1]) * cobertura$close[i]
+
+  cobertura$efectivo[i] <- efectivo_antes - cobertura$compra_acciones[i]
+  cobertura$valor_cartera[i] <-
+    cobertura$delta[i] * cobertura$close[i] + cobertura$efectivo[i]
+}
+
+cobertura$error_acumulado <- cobertura$valor_cartera - cobertura$precio_call
+cobertura$error_incremental <- c(0, diff(cobertura$error_acumulado))
+
+resumen_cobertura <- data.frame(
+  fecha_inicial = cobertura$fecha[1],
+  fecha_final = cobertura$fecha[n_dias],
+  sesiones = n_dias,
+  intervalos = n_dias - 1,
+  sigma = sigma_cobertura,
+  prima_inicial = prima_inicial,
+  cartera_final = cobertura$valor_cartera[n_dias],
+  call_final = cobertura$precio_call[n_dias],
+  error_acumulado = cobertura$error_acumulado[n_dias],
+  error_pct_prima = 100 * cobertura$error_acumulado[n_dias] / prima_inicial,
+  max_error_absoluto = max(abs(cobertura$error_acumulado))
+)
+
+resumen_cobertura
+cobertura[, c("fecha", "close", "precio_call", "delta", "efectivo",
+              "valor_cartera", "error_incremental", "error_acumulado")]
+```
+
+Los importes se reportan en USD por una unidad de opción sobre una
+acción. Para un contrato, multiplicar por el multiplicador contractual
+verificado.
+
+```{r}
+plot(
+  cobertura$fecha, cobertura$error_acumulado,
+  type = "o", pch = 16, col = "steelblue",
+  xlab = "Fecha", ylab = "Error acumulado (USD por acción)",
+  main = "Error de replicación de la delta-cobertura"
+)
+abline(h = 0, lty = 2, col = "gray50")
+
+write.csv(cobertura, "NTR_delta_cobertura_20260928.csv", row.names = FALSE)
+write.csv(resumen_cobertura, "NTR_resumen_cobertura_20260928.csv",
+          row.names = FALSE)
+```
+
+## Capa de verificación
+
+Se comprueba que cada rebalanceo conserve el valor de la cartera y que
+no requiera aportes externos. Los intereses se calculan por días
+calendario, incluyendo los intervalos de fin de semana. La comparación
+con una venta sin cobertura mide ambos resultados contra la misma prima
+y el mismo valor final de la call; no implica que cubrir siempre
+produzca un error menor en una trayectoria concreta.
+
+```{r}
+tolerancia <- 1e-8
+indices <- 2:n_dias
+valor_antes_rebalanceo <- cobertura$delta[indices - 1] *
+  cobertura$close[indices] + cobertura$efectivo[indices - 1] +
+  cobertura$intereses[indices] + cobertura$dividendos_modelo[indices]
+
+chequeos_cobertura <- data.frame(
+  Chequeo = c(
+    "Veinte sesiones distintas y ordenadas",
+    "Valores finitos",
+    "Delta entre cero y exp(-q * plazo)",
+    "Error inicial igual a cero",
+    "Rebalanceos conservan el valor de la cartera",
+    "Suma de errores incrementales igual al error final"
+  ),
+  Resultado = c(
+    n_dias == 20 && all(diff(cobertura$fecha) > 0),
+    all(is.finite(as.matrix(cobertura[, c(
+      "precio_call", "delta", "efectivo", "valor_cartera", "error_acumulado"
+    )]))),
+    all(cobertura$delta >= 0 &
+          cobertura$delta <= exp(-q_cobertura * cobertura$plazo) + tolerancia),
+    abs(cobertura$error_acumulado[1]) < tolerancia,
+    max(abs(valor_antes_rebalanceo - cobertura$valor_cartera[indices])) <
+      tolerancia,
+    abs(sum(cobertura$error_incremental) -
+          cobertura$error_acumulado[n_dias]) < tolerancia
+  )
+)
+chequeos_cobertura
+
+plazo_ventana <- as.numeric(cobertura$fecha[n_dias] - cobertura$fecha[1]) / 365
+error_sin_cobertura <- prima_inicial * exp(r_cobertura * plazo_ventana) -
+  cobertura$precio_call[n_dias]
+
+comparacion_cobertura <- data.frame(
+  estrategia = c("Delta con rebalanceo diario", "Prima en efectivo sin acciones"),
+  resultado_final = c(cobertura$error_acumulado[n_dias], error_sin_cobertura)
+)
+comparacion_cobertura
+```
+
+## El supuesto que no se cumplió
+
+**Por redactar con los resultados:** comparar el rebalanceo diario con
+la negociación continua de la Proposición 10.7. ¿Cuál fue el error
+final, cuánto representa de la prima y cuál fue el mayor error absoluto
+durante la ventana? ¿Qué permite concluir esta trayectoria y qué no?
+
+## Qué queda pendiente
+
+Esta es una simulación retrospectiva bajo un modelo europeo, con
+acciones fraccionarias, sin comisiones ni spread en las operaciones de
+cobertura. La prima inicial y los valores diarios de la opción son
+teóricos porque no se incorporó su historia de bid/ask. Por ello, el
+resultado no constituye un P&L observado de mercado.
+
+El yield equivalente q se mantiene constante y sus flujos se simulan
+como continuos: no representan pagos efectivos de NTR. La fecha
+ex-dividendo registrada, 29/09/2026, queda fuera de la ventana que
+termina el 28/09/2026. Queda pendiente repetir la cobertura con
+dividendos discretos y una valoración consistente con ellos, tasas
+disponibles al inicio, costos de negociación y ejercicio americano. La
+volatilidad sí se estima con datos disponibles al inicio de la ventana.
+
+>>>>>>> 00ae6cd4c4c9d075e2a569d1dbd2b8a755307640
 
