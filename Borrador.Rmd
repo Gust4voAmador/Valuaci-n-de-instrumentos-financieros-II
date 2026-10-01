@@ -20,6 +20,7 @@ for (paquete in paquetes) {
 
 library(quantmod)
 library(lubridate)
+library(dplyr)
 ```
 
 ## Fecha fija y datos de la opción
@@ -1487,20 +1488,170 @@ sonrisa de volatilidad (*volatility smile*), como se discute en la sección
 
 ## (c)  La paridad, con datos reales
 
+# (c) Chequeo de paridad put-call
+
+## Aparato
+
+Se utiliza la relación de paridad put-call para opciones europeas sobre un activo que paga un *dividend yield* continuo $q$. Para una call y una put con el mismo precio de ejercicio $K$ y el mismo vencimiento $T$, la relación teórica es
+
+$$
+C_0-P_0
+=
+S_0e^{-qT}
+-
+Ke^{-rT}.
+$$
+
+Por tanto, se comparan dos cantidades. El lado izquierdo corresponde a la diferencia observada entre el precio de la call y el precio de la put,
+
+$$
+LHS=C_0-P_0,
+$$
+
+mientras que el lado derecho corresponde al valor impuesto por la paridad,
+
+$$
+RHS=S_0e^{-qT}-Ke^{-rT}.
+$$
+
+Debido a que las opciones presentan precios *bid* y *ask* en lugar de un único precio de mercado, se utiliza como precio representativo el punto medio de cada cotización:
+
+$$
+C_{\text{mid}}
+=
+\frac{C_{\text{bid}}+C_{\text{ask}}}{2},
+$$
+
+$$
+P_{\text{mid}}
+=
+\frac{P_{\text{bid}}+P_{\text{ask}}}{2}.
+$$
+
+De esta forma, la brecha observada respecto de la paridad se define como
+
+$$
+\text{Brecha}
+=
+\left(C_{\text{mid}}-P_{\text{mid}}\right)
+-
+\left(
+S_0e^{-qT}-Ke^{-rT}
+\right).
+$$
+
+Para medir cuánto de esta brecha puede ser explicado únicamente por el diferencial entre precios de compra y venta, se construye una banda alrededor de los precios medios:
+
+$$
+\text{Banda bid-ask}
+=
+\frac{
+(C_{\text{ask}}-C_{\text{bid}})
++
+(P_{\text{ask}}-P_{\text{bid}})
+}{2}.
+$$
+
+La parte de la brecha que puede ser explicada por el diferencial *bid-ask* es entonces
+
+$$
+\text{Brecha explicada}
+=
+\min
+\left(
+|\text{Brecha}|,
+\text{Banda bid-ask}
+\right),
+$$
+
+mientras que la parte que permanece sin explicar es
+
+$$
+\text{Brecha no explicada}
+=
+\max
+\left(
+|\text{Brecha}|-\text{Banda bid-ask},
+0
+\right).
+$$
+
+Finalmente, el porcentaje explicado por el diferencial *bid-ask* se calcula como
+
+$$
+\%\text{ explicado}
+=
+100
+\frac{
+\text{Brecha explicada}
+}{
+|\text{Brecha}|
+}.
+$$
+
+Un porcentaje de $100\%$ significa que la brecha observada respecto de los precios medios se encuentra completamente dentro del margen que puede ser explicado por los diferenciales *bid-ask*. Esto no implica que se haya demostrado que el *spread* sea la única causa de la diferencia, sino únicamente que su magnitud es suficiente para cubrirla.
+
+Para realizar la comparación, cada call se empareja con una put que tenga exactamente el mismo *strike*, fecha de vencimiento y fecha de consulta.
+
+
 ```{r}
 ## -----------------------------------------------------------------------------
 ## Datos
 ## -----------------------------------------------------------------------------
-cadena_opciones <- opciones   # la función usa este nombre
+cadena_opciones <- opciones$vencimiento   # la función usa este nombre
+S_PARIDAD <- 69
+r  <- r                              # <-- tasa libre de riesgo (continua)
+q  <- q                                # <-- dividendo continuo
+cadena_opciones <- opciones %>%
+  mutate(
+    # Tiempo hasta vencimiento expresado en años
+    Tt = as.numeric(vencimiento - fecha_consulta) / 365
+  )
+## -----------------------------------------------------------------------------
+## Separar calls y puts
+## -----------------------------------------------------------------------------
 
-opcion_trabajo <- list(vencimiento = as.Date("2026-12-18"))
+calls <- cadena_opciones %>%
+  filter(tipo == "call") %>%
+  select(
+    vencimiento,
+    strike,
+    fecha_consulta,
+    hora_consulta,
+    contrato_call = contrato,
+    call_bid = bid,
+    call_ask = ask
+  )
 
-## Parámetros: ajústalos a tu captura
-S_CAPTURA     <- 70                      # <-- precio spot de NTR al momento de la captura
-fecha_captura <- as.Date("2026-09-30")   # <-- fecha de la captura
-r  <- 0.04                               # <-- tasa libre de riesgo (continua)
-q  <- 0.0                                # <-- dividendo continuo
-Tt <- as.numeric(opcion_trabajo$vencimiento - fecha_captura) / 365
+
+puts <- cadena_opciones %>%
+  filter(tipo == "put") %>%
+  select(
+    vencimiento,
+    strike,
+    fecha_consulta,
+    contrato_put = contrato,
+    put_bid = bid,
+    put_ask = ask
+  )
+
+
+## -----------------------------------------------------------------------------
+## Emparejar call y put con mismo strike y mismo vencimiento
+## -----------------------------------------------------------------------------
+
+pares_paridad <- inner_join(
+  calls,
+  puts,
+  by = c(
+    "vencimiento",
+    "strike",
+    "fecha_consulta"
+  )
+) %>%
+  mutate(
+    Tt = as.numeric(vencimiento - fecha_consulta) / 365
+  )
 
 ## -----------------------------------------------------------------------------
 ## Paridad put-call
@@ -1526,37 +1677,214 @@ parity_check <- function(call_bid, call_ask, put_bid, put_ask, S, K, r, Tt, q) {
   porcentaje_explicado <- ifelse(brecha_abs == 0, 100,
                                  100 * explicada_bidask / brecha_abs)
 
-  data.frame(strike = K, lhs = lhs, rhs = rhs, brecha = brecha,
+  data.frame(strike = K,Tt = Tt, lhs = lhs, rhs = rhs, brecha = brecha,
              banda_bidask = banda_bidask,
              no_explicada = no_explicada,
              porcentaje_explicado = porcentaje_explicado)
 }
 
-## -----------------------------------------------------------------------------
-## Emparejar calls y puts (solo con cotización válida)
-## -----------------------------------------------------------------------------
-cotizadas <- subset(cadena_opciones,
-                    vencimiento == opcion_trabajo$vencimiento &
-                    bid > 0 & ask > 0)
-
-pares <- merge(
-  subset(cotizadas, tipo == "Call", select = c(strike, bid, ask)),
-  subset(cotizadas, tipo == "Put",  select = c(strike, bid, ask)),
-  by = "strike", suffixes = c("_call", "_put")
+resultado_paridad <- parity_check(
+  call_bid = pares_paridad$call_bid,
+  call_ask = pares_paridad$call_ask,
+  put_bid  = pares_paridad$put_bid,
+  put_ask  = pares_paridad$put_ask,
+  S  = S_PARIDAD,
+  K  = pares_paridad$strike,
+  r  = r,
+  Tt = pares_paridad$Tt,
+  q  = q
+)
+resultado_paridad <- bind_cols(
+  pares_paridad %>%
+    select(
+      vencimiento,
+      contrato_call,
+      contrato_put,
+      fecha_consulta,
+      hora_consulta
+    ),
+  resultado_paridad
 )
 
-if (nrow(pares) == 0) {
-  cat("\n--- (c) Paridad put-call: sin pares call/put para este vencimiento. ---\n")
-} else {
-  resultados_paridad <- do.call(rbind, lapply(seq_len(nrow(pares)), function(i) {
-    parity_check(pares$bid_call[i], pares$ask_call[i],
-                 pares$bid_put[i],  pares$ask_put[i],
-                 S_CAPTURA, pares$strike[i], r, Tt, q)
-  }))
-  cat("\n--- (c) Paridad put-call (strikes con call y put cotizados) ---\n")
-  print(resultados_paridad, digits = 5)
-}
+
+## -----------------------------------------------------------------------------
+## Resultado final
+## -----------------------------------------------------------------------------
+
+resultado_paridad
 ```
+
+## Capa de verificación
+
+Antes de interpretar económicamente las brechas se realizan varios chequeos sobre la construcción del ejercicio.
+
+En primer lugar, se verifica que todos los pares utilizados tengan plazo positivo al vencimiento y que los resultados obtenidos sean finitos. También se comprueba que la banda *bid-ask* sea no negativa y que el porcentaje explicado se encuentre entre $0\%$ y $100\%$.
+
+Finalmente, se comprueba algebraicamente que la magnitud total de la brecha pueda descomponerse como
+
+$$
+|\text{Brecha}|
+=
+\text{Brecha explicada por bid-ask}
++
+\text{Brecha no explicada}.
+$$
+
+Estos chequeos no prueban que la paridad deba cumplirse exactamente en los datos de mercado; verifican que el cálculo realizado sea internamente consistente.
+
+```{r}
+tolerancia_paridad <- 1e-10
+
+brecha_abs_verificacion <- abs(resultado_paridad$brecha)
+
+explicada_bidask_verificacion <- pmin(
+  brecha_abs_verificacion,
+  resultado_paridad$banda_bidask
+)
+
+no_explicada_verificacion <- resultado_paridad$no_explicada
+
+chequeos_paridad <- data.frame(
+  Chequeo = c(
+    "Se encontraron pares call-put",
+    "Todos los plazos son positivos",
+    "Los resultados son finitos",
+    "La banda bid-ask es no negativa",
+    "El porcentaje explicado esta entre 0 y 100",
+    "La brecha se descompone en explicada y no explicada"
+  ),
+  Resultado = c(
+    nrow(resultado_paridad) > 0,
+    all(resultado_paridad$Tt > 0),
+    all(is.finite(as.matrix(
+      resultado_paridad[, c(
+        "strike",
+        "Tt",
+        "lhs",
+        "rhs",
+        "brecha",
+        "banda_bidask",
+        "no_explicada",
+        "porcentaje_explicado"
+      )]
+    ))),
+    all(resultado_paridad$banda_bidask >= 0),
+    all(
+      resultado_paridad$porcentaje_explicado >= 0 &
+      resultado_paridad$porcentaje_explicado <= 100
+    ),
+    all(
+      abs(
+        brecha_abs_verificacion -
+          explicada_bidask_verificacion -
+          no_explicada_verificacion
+      ) < tolerancia_paridad
+    )
+  )
+)
+
+chequeos_paridad
+```
+
+Para facilitar la interpretación económica se construye además una tabla que muestra explícitamente la magnitud de la brecha, la parte que puede ser explicada por el diferencial *bid-ask* y la parte residual.
+
+```{r}
+resumen_paridad <- resultado_paridad %>%
+  mutate(
+    brecha_abs = abs(brecha),
+    explicada_bidask = pmin(
+      brecha_abs,
+      banda_bidask
+    ),
+    porcentaje_no_explicado =
+      100 - porcentaje_explicado,
+    totalmente_explicada_bidask =
+      no_explicada <= tolerancia_paridad
+  ) %>%
+  select(
+    vencimiento,
+    contrato_call,
+    contrato_put,
+    strike,
+    Tt,
+    lhs,
+    rhs,
+    brecha,
+    brecha_abs,
+    banda_bidask,
+    explicada_bidask,
+    no_explicada,
+    porcentaje_explicado,
+    porcentaje_no_explicado,
+    totalmente_explicada_bidask
+  )
+
+resumen_paridad
+```
+
+La interpretación se realiza individualmente para cada par de opciones.
+
+Si
+
+$$
+\text{no explicada}=0,
+$$
+
+entonces toda la desviación entre la paridad teórica y los precios medios se encuentra dentro de la banda compatible con los precios *bid* y *ask* observados.
+
+En ese caso puede afirmarse que:
+
+> La totalidad de la brecha observada puede ser explicada por el diferencial bid-ask, por lo que no queda una porción residual fuera de dicho margen.
+
+Si, por el contrario,
+
+$$
+\text{no explicada}>0,
+$$
+
+entonces el diferencial *bid-ask* solamente explica una parte de la desviación y permanece una brecha residual.
+
+No debe interpretarse automáticamente esta brecha residual como una oportunidad de arbitraje, pues el ejercicio utiliza supuestos adicionales que no se cumplen exactamente en los contratos observados.
+
+## El supuesto que no se cumplió
+
+La igualdad utilizada,
+
+$$
+C_0-P_0
+=
+S_0e^{-qT}
+-
+Ke^{-rT},
+$$
+
+corresponde a la paridad put-call de **opciones europeas**.
+
+Sin embargo, las opciones sobre NTR utilizadas en este ejercicio son opciones de mercado con característica de ejercicio americano. En una opción americana existe la posibilidad de ejercer antes del vencimiento, mientras que la igualdad anterior supone que el ejercicio solamente ocurre en $T$.
+
+Esta diferencia es especialmente relevante porque el valor de la opción americana puede incluir un componente asociado al derecho de ejercicio anticipado. Por ello, una brecha residual después de considerar el diferencial *bid-ask* no puede atribuirse automáticamente a un incumplimiento de no arbitraje.
+
+El ejercicio debe interpretarse entonces como un chequeo de referencia respecto del modelo europeo utilizado en el curso:
+
+$$
+\boxed{
+\text{paridad europea teórica}
+\quad\text{vs.}\quad
+\text{cotizaciones observadas de mercado}
+}
+$$
+
+Otro supuesto es que los dividendos se representan mediante un *dividend yield* continuo $q$. Esta representación permite mantener la estructura del modelo de Black-Scholes utilizada anteriormente, pero reemplaza los pagos discretos de dividendos del activo por un rendimiento continuo equivalente.
+
+Además, la comparación supone que el precio spot $S_{\text{PARIDAD}}$, los precios *bid-ask* de las calls y los precios *bid-ask* de las puts representan aproximadamente el mismo instante de mercado. Si las cotizaciones no son simultáneas, parte de la brecha podría originarse simplemente en movimientos del precio del subyacente entre observaciones.
+
+## Qué queda pendiente
+
+El ejercicio mide correctamente, dentro de la aproximación europea utilizada, cuánto de la diferencia respecto de la paridad puede quedar contenido en el diferencial *bid-ask* y cuánto permanece fuera de él.
+
+No obstante, no constituye por sí solo una prueba de arbitraje. Para hacer un chequeo completamente consistente con los contratos observados habría que considerar las relaciones de no arbitraje correspondientes a opciones americanas, el tratamiento de dividendos discretos, la sincronización exacta entre el spot y las cotizaciones de las opciones, costos de transacción y las condiciones efectivas de financiamiento.
+
+Además, el uso de precios medios sirve para medir la brecha, pero dichos precios no necesariamente son precios a los que una operación pueda ejecutarse. Por ello, el análisis del *bid-ask* debe interpretarse como una medida de cuánto de la desviación observada puede estar contenido dentro de la incertidumbre generada por las cotizaciones de compra y venta.
 
 =======
 # (d) Una delta-cobertura hacia atrás
@@ -1632,7 +1960,7 @@ sigma_cobertura <- sd(tail(diff(log(precios_antes)), 252)) * sqrt(252)
 
 # Aquí se considerarn las condiciones del primer black scholes con sus dividendos y su r
 
-#r_cobertura <- r
+r_cobertura <- r
 q_cobertura <- q
 
 
