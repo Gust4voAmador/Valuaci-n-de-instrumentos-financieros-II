@@ -171,83 +171,84 @@ opciones
 Para nuestro caso utilizaremos la letra del tesoro a 3 meses
 
 ```{r}
-# dtb3 <- getSymbols(
-#   "DTB3",
-#   src = "FRED",
-#   from = fecha_valoracion - 30,
-#   to = fecha_valoracion + 1,
-#   auto.assign = FALSE
-# )
-#
-# tabla_tasas <- data.frame(
-#   fecha = as.Date(zoo::index(dtb3)),
-#   tasa_descuento_pct = as.numeric(dtb3[, 1])
-# )
-#
-# tabla_tasas <- tabla_tasas[
-#   tabla_tasas$fecha <= fecha_valoracion &
-#     is.finite(tabla_tasas$tasa_descuento_pct),
-# ]
-#
-# if (nrow(tabla_tasas) == 0) {
-#   stop("No se encontró una tasa DTB3 disponible hasta la fecha de valoración.")
+ dtb3 <- getSymbols(
+   "DTB3",
+   src = "FRED",
+   from = fecha_valoracion - 30,
+   to = fecha_valoracion + 1,
+   auto.assign = FALSE
+ )
+
+ tabla_tasas <- data.frame(
+   fecha = as.Date(zoo::index(dtb3)),
+   tasa_descuento_pct = as.numeric(dtb3[, 1])
+ )
+
+ tabla_tasas <- tabla_tasas[
+   tabla_tasas$fecha <= fecha_valoracion &
+     is.finite(tabla_tasas$tasa_descuento_pct),
+ ]
+
+ if (nrow(tabla_tasas) == 0) {
+   stop("No se encontró una tasa DTB3 disponible hasta la fecha de valoración.")
+ }
+
+ tasa_usada <- tabla_tasas[nrow(tabla_tasas), ]
+
+ # DTB3 está en porcentaje anual sobre base de descuento de 360 días.
+ # Aproximamos el plazo de la letra de tres meses mediante 91 días.
+ dias_letra <- 91
+ descuento <- tasa_usada$tasa_descuento_pct / 100
+ precio_letra <- 1 - descuento * dias_letra / 360
+
+ if (precio_letra <= 0) {
+   stop("La tasa DTB3 produjo un precio de letra inválido.")
+ }
+
+ # Tasa anual con capitalización continua, en base de 365 días.
+ r <- -log(precio_letra) / (dias_letra / 365)
+
+ write.csv(
+   tasa_usada,
+   "DTB3_tasa_usada_20260928.csv",
+   row.names = FALSE
+ )
+
+
+
+
+# # Cargar la tasa guardada desde un archivo CSV sin convertir textos a factores
+# tasa_usada <- read.csv("DTB3_tasa_usada_20260928.csv", stringsAsFactors = FALSE)
+# 
+# # Convertir la columna de fecha del archivo al formato Date de R
+# tasa_usada$fecha <- as.Date(tasa_usada$fecha)
+# 
+# # Validar que exista una sola fila, fecha válida, menor o igual a la 
+# # fecha de valoración y que la tasa de descuento sea un número finito
+# if (nrow(tasa_usada) != 1 || is.na(tasa_usada$fecha) || tasa_usada$fecha > as.Date(fecha_valoracion) || !is.finite(tasa_usada$tasa_descuento_pct)) {
+#   stop("El archivo debe contener una tasa válida hasta la fecha de valoración.")
 # }
-#
-# tasa_usada <- tabla_tasas[nrow(tabla_tasas), ]
-#
-# # DTB3 está en porcentaje anual sobre base de descuento de 360 días.
-# # Aproximamos el plazo de la letra de tres meses mediante 91 días.
+# 
+# # Definir el plazo de la letra en días (aproximamos tres meses a 91 días)
 # dias_letra <- 91
+# 
+# # Convertir la tasa expresada en porcentaje a formato decimal
 # descuento <- tasa_usada$tasa_descuento_pct / 100
+# 
+# # Calcular el precio de la letra usando la base de descuento de 360 días de la DTB3
 # precio_letra <- 1 - descuento * dias_letra / 360
-#
+# 
+# # Verificar que el precio obtenido de la letra sea un valor positivo mayor a cero
 # if (precio_letra <= 0) {
 #   stop("La tasa DTB3 produjo un precio de letra inválido.")
 # }
-#
-# # Tasa anual con capitalización continua, en base de 365 días.
+# 
+# # Calcular la tasa anual equivalente con capitalización continua (base de 365 días)
 # r <- -log(precio_letra) / (dias_letra / 365)
-#
-# write.csv(
-#   tasa_usada,
-#   "DTB3_tasa_usada_20260928.csv",
-#   row.names = FALSE
-# )
+# 
+# # Asignar la misma tasa calculada a la variable específica de cobertura
+# r_cobertura <- -log(precio_letra) / (dias_letra / 365)
 
-
-
-
-# Leer la tasa previamente guardada.
-tasa_usada <- read.csv(
-  "DTB3_tasa_usada_20260928.csv",
-  stringsAsFactors = FALSE
-)
-
-tasa_usada$fecha <- as.Date(tasa_usada$fecha)
-
-# Validar la tasa y la fecha de corte.
-if (
-  nrow(tasa_usada) != 1 ||
-  is.na(tasa_usada$fecha) ||
-  tasa_usada$fecha > as.Date(fecha_valoracion) ||
-  !is.finite(tasa_usada$tasa_descuento_pct)
-) {
-  stop("El archivo debe contener una tasa válida hasta la fecha de valoración.")
-}
-
-# DTB3 está en porcentaje anual sobre base de descuento de 360 días.
-# Aproximamos el plazo de la letra de tres meses mediante 91 días.
-dias_letra <- 91
-descuento <- tasa_usada$tasa_descuento_pct / 100
-precio_letra <- 1 - descuento * dias_letra / 360
-
-if (precio_letra <= 0) {
-  stop("La tasa DTB3 produjo un precio de letra inválido.")
-}
-
-# Tasa anual con capitalización continua, en base de 365 días.
-r <- -log(precio_letra) / (dias_letra / 365)
-r_cobertura  <- -log(precio_letra) / (dias_letra / 365)
 ```
 
 ## Cálculo de volatidad histórica
