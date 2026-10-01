@@ -490,8 +490,6 @@ volatilidad implícita cambia con el strike y estudiar la presencia de una
 sonrisa de volatilidad (*volatility smile*), como se discute en la sección
 7.8.2 de Björk.
 
-
-<<<<<<< HEAD
 ## (c)  La paridad, con datos reales
 
 Para los datos a utilizar:
@@ -520,6 +518,7 @@ opciones
 ```{r}
 
 ```
+
 =======
 # (d) Una delta-cobertura hacia atrás
 
