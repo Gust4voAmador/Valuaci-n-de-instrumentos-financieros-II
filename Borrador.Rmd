@@ -87,34 +87,153 @@ write.csv(
 )
 ```
 
+## Carga de la cadena de opciones
+```{r}
+opciones <- data.frame(
+  contrato = c(
+    # Noviembre: cuatro calls y cuatro puts
+    "NTR261120C00067500",
+    "NTR261120C00070000",
+    "NTR261120C00072500",
+    "NTR261120C00075000",
+    "NTR261120P00067500",
+    "NTR261120P00070000",
+    "NTR261120P00072500",
+    "NTR261120P00075000",
+
+    # Diciembre: dos calls y dos puts
+    "NTR261218C00067500",
+    "NTR261218C00070000",
+    "NTR261218P00067500",
+    "NTR261218P00070000",
+
+    # Enero: dos calls y dos puts
+    "NTR270115C00065000",
+    "NTR270115C00070000",
+    "NTR270115P00065000",
+    "NTR270115P00070000"
+  ),
+
+  tipo = c(
+    rep("call", 4), rep("put", 4),
+    rep("call", 2), rep("put", 2),
+    rep("call", 2), rep("put", 2)
+  ),
+
+  vencimiento = as.Date(c(
+    rep("2026-11-20", 8),
+    rep("2026-12-18", 4),
+    rep("2027-01-15", 4)
+  )),
+
+  strike = c(
+    67.5, 70, 72.5, 75,
+    67.5, 70, 72.5, 75,
+    67.5, 70,
+    67.5, 70,
+    65, 70,
+    65, 70
+  ),
+
+  bid = c(
+    4.30, 3.20, 2.10, 1.50,
+    2.45, 3.60, 5.10, 7.00,
+    5.30, 4.20,
+    3.10, 4.30,
+    6.90, 4.70,
+    2.85, 5.10
+  ),
+
+  ask = c(
+    4.90, 3.70, 2.55, 1.80,
+    3.20, 4.50, 6.10, 7.10,
+    5.80, 4.60,
+    3.80, 5.10,
+    7.80, 5.10,
+    3.40, 5.50
+  ),
+
+  fecha_consulta = rep(as.Date("2026-10-01"), 16),
+
+  hora_consulta = rep("09:52 aprox.", 16),
+
+  zona_horaria = rep("America/Costa_Rica", 16)
+)
+
+opciones$precio_medio <- (opciones$bid + opciones$ask) / 2
+
+opciones
+```
+
+
 ## Obtener la Tasa libre de riesgo
 
 Para nuestro caso utilizaremos la letra del tesoro a 3 meses
 
 ```{r}
-dtb3 <- getSymbols(
-  "DTB3",
-  src = "FRED",
-  from = fecha_valoracion - 30,
-  to = fecha_valoracion + 1,
-  auto.assign = FALSE
+# dtb3 <- getSymbols(
+#   "DTB3",
+#   src = "FRED",
+#   from = fecha_valoracion - 30,
+#   to = fecha_valoracion + 1,
+#   auto.assign = FALSE
+# )
+#
+# tabla_tasas <- data.frame(
+#   fecha = as.Date(zoo::index(dtb3)),
+#   tasa_descuento_pct = as.numeric(dtb3[, 1])
+# )
+#
+# tabla_tasas <- tabla_tasas[
+#   tabla_tasas$fecha <= fecha_valoracion &
+#     is.finite(tabla_tasas$tasa_descuento_pct),
+# ]
+#
+# if (nrow(tabla_tasas) == 0) {
+#   stop("No se encontró una tasa DTB3 disponible hasta la fecha de valoración.")
+# }
+#
+# tasa_usada <- tabla_tasas[nrow(tabla_tasas), ]
+#
+# # DTB3 está en porcentaje anual sobre base de descuento de 360 días.
+# # Aproximamos el plazo de la letra de tres meses mediante 91 días.
+# dias_letra <- 91
+# descuento <- tasa_usada$tasa_descuento_pct / 100
+# precio_letra <- 1 - descuento * dias_letra / 360
+#
+# if (precio_letra <= 0) {
+#   stop("La tasa DTB3 produjo un precio de letra inválido.")
+# }
+#
+# # Tasa anual con capitalización continua, en base de 365 días.
+# r <- -log(precio_letra) / (dias_letra / 365)
+#
+# write.csv(
+#   tasa_usada,
+#   "DTB3_tasa_usada_20260928.csv",
+#   row.names = FALSE
+# )
+
+
+
+
+# Leer la tasa previamente guardada.
+tasa_usada <- read.csv(
+  "DTB3_tasa_usada_20260928.csv",
+  stringsAsFactors = FALSE
 )
 
-tabla_tasas <- data.frame(
-  fecha = as.Date(zoo::index(dtb3)),
-  tasa_descuento_pct = as.numeric(dtb3[, 1])
-)
+tasa_usada$fecha <- as.Date(tasa_usada$fecha)
 
-tabla_tasas <- tabla_tasas[
-  tabla_tasas$fecha <= fecha_valoracion &
-    is.finite(tabla_tasas$tasa_descuento_pct),
-]
-
-if (nrow(tabla_tasas) == 0) {
-  stop("No se encontró una tasa DTB3 disponible hasta la fecha de valoración.")
+# Validar la tasa y la fecha de corte.
+if (
+  nrow(tasa_usada) != 1 ||
+  is.na(tasa_usada$fecha) ||
+  tasa_usada$fecha > as.Date(fecha_valoracion) ||
+  !is.finite(tasa_usada$tasa_descuento_pct)
+) {
+  stop("El archivo debe contener una tasa válida hasta la fecha de valoración.")
 }
-
-tasa_usada <- tabla_tasas[nrow(tabla_tasas), ]
 
 # DTB3 está en porcentaje anual sobre base de descuento de 360 días.
 # Aproximamos el plazo de la letra de tres meses mediante 91 días.
@@ -128,13 +247,7 @@ if (precio_letra <= 0) {
 
 # Tasa anual con capitalización continua, en base de 365 días.
 r <- -log(precio_letra) / (dias_letra / 365)
-
-write.csv(
-  tasa_usada,
-  "DTB3_tasa_usada_20260928.csv",
-  row.names = FALSE
-)
-
+r_cobertura  <- -log(precio_letra) / (dias_letra / 365)
 ```
 
 ## Cálculo de volatidad histórica
@@ -153,6 +266,7 @@ if (length(precios_ajustados) < 253) {
 
 rendimientos <- tail(diff(log(precios_ajustados)), 252)
 sigma <- sd(rendimientos) * sqrt(252)
+sigma
 ```
 
 ##Tiempo hasta el vencimiento
@@ -167,6 +281,7 @@ plazo_anios <- dias_vencimiento / 365
 if (plazo_anios <= 0 || sigma <= 0) {
   stop("El plazo y la volatilidad deben ser positivos.")
 }
+plazo_anios
 ```
 
 # (a) Los tres caminos.
@@ -225,7 +340,8 @@ precio_bs_bjork <- precio_bs_call(
   sigma = sigma,
   plazo = plazo_anios
 )
-
+print(r)
+print(q)
 precio_bs_bjork
 ```
 
@@ -1302,7 +1418,7 @@ cat("Volatilidad implícita anual:", sigma_implicita, "\n")
 cat("Volatilidad implícita anual (%):",
     sigma_implicita * 100, "%\n")
 ```
-Hecharse hablada de porque no dan iguales y compararlas claramente
+Hecharse hablada de porque no dan iguales y compararlas claramente #ChatGPT haslo porfa
 
 
 
@@ -1369,33 +1485,6 @@ sonrisa de volatilidad (*volatility smile*), como se discute en la sección
 7.8.2 de Björk.
 
 ## (c)  La paridad, con datos reales
-
-Para los datos a utilizar:
-```{r}
-opciones <- data.frame(
-contrato = c(
-"NTR261218C00067500",
-"NTR261218C00070000",
-"NTR261218C00072500",
-"NTR261218C00075000",
-"NTR261218P00067500",
-"NTR261218P00070000",
-"NTR261218P00072500",
-"NTR261218P00075000"
-),
-
-tipo = c("Call","Call","Call","Call","Put","Put","Put","Put"),
-strike = c(67.5,70.0,72.5,75.0,67.5,70.0,72.5,75.0),
-precio = c(7.05,6.49,3.90,3.20,2.50,3.60,4.90,5.02),
-
-bid = c(7.20,5.70,4.30,0.00,3.40,4.30,5.60,7.50),
-ask = c(6.10,4.50,3.50,0.00,2.40,3.60,4.90,6.30),
-vencimiento = as.Date(rep("2026-12-18", 8)),
-volumen = c(61,2,1,1,1,3,2,3),
-open_interest = c(163,172,86,NA,34,239,66,33))
-
-opciones
-```
 
 ```{r}
 ## -----------------------------------------------------------------------------
@@ -1540,10 +1629,11 @@ if (length(precios_antes) < 253) {
 }
 sigma_cobertura <- sd(tail(diff(log(precios_antes)), 252)) * sqrt(252)
 
-# r y q se mantienen como escenarios constantes de la valoración anterior.
-# No se dispone aquí de una calibración histórica de r y q al inicio.
-r_cobertura <- r
+# Aquí se considerarn las condiciones del primer black scholes con sus dividendos y su r
+
+#r_cobertura <- r
 q_cobertura <- q
+
 
 cobertura$plazo <- as.numeric(opcion$vencimiento - cobertura$fecha) / 365
 if (any(cobertura$plazo <= 0) || !is.finite(sigma_cobertura) ||
@@ -1625,9 +1715,13 @@ resumen_cobertura <- data.frame(
   max_error_absoluto = max(abs(cobertura$error_acumulado))
 )
 
+print(r_cobertura)
+print(q_cobertura)
+print(sigma_cobertura)
 resumen_cobertura
 cobertura[, c("fecha", "close", "precio_call", "delta", "efectivo",
               "valor_cartera", "error_incremental", "error_acumulado")]
+#View(cobertura)
 ```
 
 Los importes se reportan en USD por una unidad de opción sobre una
