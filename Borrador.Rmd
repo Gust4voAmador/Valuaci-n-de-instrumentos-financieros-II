@@ -561,7 +561,7 @@ pde_price <- function(S, K, r, sigma, Tt,
   }
   
   
-  # Resuelve un sistema tridiagonal mediante el algoritmo de Thomas
+  # Resuelve un sistema tridiagonal mediante el algoritmo
   
   resolver_tridiagonal <- function(inferior, diagonal, superior, rhs) {
     
@@ -1354,6 +1354,8 @@ resultado_mc_resumen
 Los tres métodos incorporan el mismo rendimiento por dividendos $q$, pero lo hacen desde representaciones diferentes del mismo modelo. En la fórmula cerrada de Black-Scholes aparece el término $S_0e^{-qT}$ y la deriva $r-q$ dentro de $d_1$; en la EDP el término $rS V_S$ se sustituye por $(r-q)S V_S$; y en Monte Carlo la deriva neutral al riesgo del precio del activo pasa de $r$ a $r-q$.
 
 Los tres procedimientos continúan suponiendo que la opción es **europea**. La incorporación de $q$ corrige el supuesto de ausencia de dividendos, pero no introduce la posibilidad de ejercicio anticipado.
+
+Dada la fecha, el que paga dividendos trimestrales,además de que el último pago de interés del año ya pasó y que la opción vence este año, sabes que q es cero, por lo que no hay diferencia entre tener o no tener intereses.
 
 
 
