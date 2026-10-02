@@ -1354,9 +1354,6 @@ Los tres métodos incorporan el mismo rendimiento por dividendos $q$, pero lo ha
 
 Los tres procedimientos continúan suponiendo que la opción es **europea**. La incorporación de $q$ corrige el supuesto de ausencia de dividendos, pero no introduce la posibilidad de ejercicio anticipado.
 
-Dada la fecha, el que paga dividendos trimestrales,además de que el último pago de interés del año ya pasó y que la opción vence este año, sabes que q es cero, por lo que no hay diferencia entre tener o no tener intereses.
-
-
 
 ## (b) La volatilidad
 
