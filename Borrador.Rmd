@@ -1,6 +1,6 @@
 ---
 title: "Borrador"
-author: "Gustavo A"
+author: "Gustavo A y Gerard G"
 date: "2026-09-29"
 output: html_document
 ---
@@ -28,7 +28,7 @@ library(dplyr)
 ```{r}
 
 # Se escoje el lunes,ya que aun aplica lo del dividendo
-fecha_valoracion <- as.Date("2026-10-01")
+fecha_valoracion <- as.Date("2026-09-28")
 fecha_inicio <- fecha_valoracion %m-% years(5)
 
 
@@ -343,7 +343,6 @@ precio_bs_bjork <- precio_bs_call(
   plazo = plazo_anios
 )
 print(r)
-print(q)
 precio_bs_bjork
 ```
 
