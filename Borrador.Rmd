@@ -1488,8 +1488,6 @@ sonrisa de volatilidad (*volatility smile*), como se discute en la sección
 
 ## (c)  La paridad, con datos reales
 
-# (c) Chequeo de paridad put-call
-
 ## Aparato
 
 Se utiliza la relación de paridad put-call para opciones europeas sobre un activo que paga un *dividend yield* continuo $q$. Para una call y una put con el mismo precio de ejercicio $K$ y el mismo vencimiento $T$, la relación teórica es
@@ -1599,7 +1597,7 @@ Para realizar la comparación, cada call se empareja con una put que tenga exact
 ## Datos
 ## -----------------------------------------------------------------------------
 cadena_opciones <- opciones$vencimiento   # la función usa este nombre
-S_PARIDAD <- 69
+S_PARIDAD <- 69.19 #Precio spot del activo een este caso la accion NTR
 r  <- r                              # <-- tasa libre de riesgo (continua)
 q  <- q                                # <-- dividendo continuo
 cadena_opciones <- opciones %>%
@@ -1677,7 +1675,7 @@ parity_check <- function(call_bid, call_ask, put_bid, put_ask, S, K, r, Tt, q) {
   porcentaje_explicado <- ifelse(brecha_abs == 0, 100,
                                  100 * explicada_bidask / brecha_abs)
 
-  data.frame(strike = K,Tt = Tt, lhs = lhs, rhs = rhs, brecha = brecha,
+  data.frame(strike = K,Tt = Tt, lhs = lhs, rhs = rhs, brecha = brecha_abs,
              banda_bidask = banda_bidask,
              no_explicada = no_explicada,
              porcentaje_explicado = porcentaje_explicado)
@@ -1787,40 +1785,6 @@ chequeos_paridad
 ```
 
 Para facilitar la interpretación económica se construye además una tabla que muestra explícitamente la magnitud de la brecha, la parte que puede ser explicada por el diferencial *bid-ask* y la parte residual.
-
-```{r}
-resumen_paridad <- resultado_paridad %>%
-  mutate(
-    brecha_abs = abs(brecha),
-    explicada_bidask = pmin(
-      brecha_abs,
-      banda_bidask
-    ),
-    porcentaje_no_explicado =
-      100 - porcentaje_explicado,
-    totalmente_explicada_bidask =
-      no_explicada <= tolerancia_paridad
-  ) %>%
-  select(
-    vencimiento,
-    contrato_call,
-    contrato_put,
-    strike,
-    Tt,
-    lhs,
-    rhs,
-    brecha,
-    brecha_abs,
-    banda_bidask,
-    explicada_bidask,
-    no_explicada,
-    porcentaje_explicado,
-    porcentaje_no_explicado,
-    totalmente_explicada_bidask
-  )
-
-resumen_paridad
-```
 
 La interpretación se realiza individualmente para cada par de opciones.
 
