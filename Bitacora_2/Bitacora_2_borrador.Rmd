@@ -1,0 +1,201 @@
+---
+title: "Bitacora 2"
+author: "Gustavo Amador Fonseca C20451"
+date: "2026-11-03"
+output: html_document
+---
+
+```{r}
+carpeta_proyecto <- "."  # Cambiar si Data esta en otra carpeta del proyecto.
+carpeta_data <- file.path(carpeta_proyecto, "Data")
+archivo_excel <- file.path(carpeta_data, "NTR.NB.xlsx")
+hoja_excel <- 1
+saltar_filas_excel <- 0  # Ajustar solo si hay un encabezado introductorio.
+excel_tiene_encabezados <- TRUE
+
+fecha_valoracion <- as.Date("2026-11-02")
+fecha_vencimiento <- as.Date("2026-12-18")
+hora_actualizacion_opciones <- "13:42:38"
+zona_horaria_pantalla <- NA_character_ # No se identifica en las capturas.
+S0 <- 69.925  # Last de la accion en la primera captura; no es precio de cierre.
+moneda <- "USD"
+fuente <- "LSEG/Refinitiv Workspace, pantalla Options OPW"
+```
+
+Las dos imagenes muestran cambios en la accion durante la captura. Se registran ambos estados; S0 toma el primero de forma explicita.
+
+```{r}
+registro_capturas <- data.frame(
+  captura = c("Primera", "Segunda"),
+  fecha = rep(fecha_valoracion, 2),
+  hora_accion = rep("13:42:24", 2),
+  hora_opciones = rep(hora_actualizacion_opciones, 2),
+  zona_horaria = rep(zona_horaria_pantalla, 2),
+  accion_bid = c(69.91, 69.91),
+  accion_ask = c(69.94, 69.95),
+  accion_last = c(69.925, 69.900),
+  moneda = moneda,
+  stringsAsFactors = FALSE
+)
+```
+
+# 2. CADENA TRANSCRITA: UNA FILA POR STRIKE
+
+iv\_\*\_pct esta en porcentaje: 35.5147 significa 35.5147%, no 0.355147%. Los cambios de interes abierto se copian con su signo original.
+
+```{r}
+cadena_opciones <- data.frame(
+  strike = c(57.5, 60, 62.5, 65, 67.5, 70, 72.5, 75, 77.5, 80, 82.5),
+  call_bid = c(12.40, 10.20, 8.10, 6.50, 4.70, 3.30, 2.35, 1.45, 0.90, 0.60, 0.35),
+  call_ask = c(13.60, 11.20, 9.00, 7.00, 5.30, 3.90, 2.75, 1.90, 1.35, 0.90, 0.65),
+  call_last = c(12.45, 10.25, 8.10, 6.25, 4.65, 3.54, 2.50, 1.69, 1.00, 0.75, 0.53),
+  call_volumen = c(NA, NA, NA, NA, NA, NA, 1, 7, 2, 50, NA),
+  call_interes_abierto = c(5, 225, 890, 171, 171, 193, 99, 1608, 168, 1429, 160),
+  call_cambio_interes_abierto = c(0, 0, 0, 0, 0, 0, 0, 10, 0, -1, 0),
+  call_iv_pct = c(39.7166, 37.6474, 36.3889, 37.4871, 36.0185, 35.5147,
+                  35.7880, 35.1369, 35.4989, 35.9564, 36.5838),
+  call_delta = c(0.9355, 0.8975, 0.8375, 0.7456, 0.6490, 0.5371,
+                 0.4255, 0.3190, 0.2335, 0.1672, 0.1182),
+  put_bid = c(0.20, 0.40, 0.75, 1.25, 2.05, 3.20, 4.50, 6.20, 8.10, 10.20, 12.40),
+  put_ask = c(0.40, 0.55, 0.95, 1.60, 2.45, 3.50, 5.00, 6.70, 8.60, 11.10, 13.30),
+  put_last = c(0.35, 0.45, 0.90, 1.70, 2.45, 3.40, 5.15, 6.95, 8.85, 10.37, 13.35),
+  put_volumen = c(22, NA, NA, NA, NA, 6, NA, NA, NA, 50, NA),
+  put_interes_abierto = c(48, 115, 160, 211, 104, 283, 66, 81, 95, 8, 100),
+  put_cambio_interes_abierto = c(0, 0, 0, 1, 1, -5, 0, 0, 0, 0, 0),
+  put_iv_pct = c(39.9005, 37.4855, 36.9129, 36.3969, 35.9204, 35.4363,
+                 35.1274, 35.1919, 34.7615, 37.5424, 37.1706),
+  put_delta = c(-0.0658, -0.1023, -0.1662, -0.2510, -0.3539, -0.4678,
+                -0.5836, -0.6904, -0.7859, -0.8347, -0.8966)
+)
+
+cadena_opciones$call_mid <- with(cadena_opciones, (call_bid + call_ask) / 2)
+cadena_opciones$put_mid <- with(cadena_opciones, (put_bid + put_ask) / 2)
+cadena_opciones$call_spread <- with(cadena_opciones, call_ask - call_bid)
+cadena_opciones$put_spread <- with(cadena_opciones, put_ask - put_bid)
+cadena_opciones
+
+```
+
+
+
+# 3. FORMATO LARGO: UNA FILA POR OPCION
+```{r}
+armar_opciones <- function(tipo, prefijo) {
+  columnas <- c("bid", "ask", "last", "volumen", "interes_abierto",
+                "cambio_interes_abierto", "iv_pct", "delta", "mid", "spread")
+  resultado <- cadena_opciones[paste0(prefijo, "_", columnas)]
+  names(resultado) <- columnas
+  resultado <- cbind(
+    data.frame(
+      subyacente = "NTR",
+      ric_accion_pantalla = "NTR.NB",
+      contrato = NA_character_, # El identificador de cada contrato no es visible.
+      tipo = tipo,
+      strike = cadena_opciones$strike,
+      fecha_captura = fecha_valoracion,
+      hora_actualizacion_opciones = hora_actualizacion_opciones,
+      zona_horaria_pantalla = zona_horaria_pantalla,
+      vencimiento = fecha_vencimiento,
+      moneda = moneda,
+      S0 = S0,
+      fuente = fuente,
+      stringsAsFactors = FALSE
+    ), resultado
+  )
+  resultado$iv <- resultado$iv_pct / 100
+  resultado$spread_relativo <- resultado$spread / resultado$mid
+  resultado$dias_al_vencimiento <- as.integer(fecha_vencimiento - fecha_valoracion)
+  resultado$T <- resultado$dias_al_vencimiento / 365
+  # Last puede ser una transaccion antigua: se registra sin reemplazarlo por mid.
+  resultado$last_fuera_bid_ask <- with(resultado, last < bid | last > ask)
+  resultado
+}
+
+```
+
+```{r}
+opciones <- rbind(armar_opciones("Call", "call"), armar_opciones("Put", "put"))
+rownames(opciones) <- NULL
+calls <- opciones[opciones$tipo == "Call", ]
+puts <- opciones[opciones$tipo == "Put", ]
+
+# Todos los pares se conservan; la seleccion de calidad se hara al analizarlos.
+pares_opciones <- cadena_opciones[
+  c("strike", "call_bid", "call_ask", "call_mid", "put_bid", "put_ask", "put_mid")
+]
+pares_opciones$fecha_captura <- fecha_valoracion
+pares_opciones$vencimiento <- fecha_vencimiento
+pares_opciones$S0 <- S0
+pares_opciones$T <- as.integer(fecha_vencimiento - fecha_valoracion) / 365
+
+call_principal <- calls[which.min(abs(calls$strike - S0)), ]
+```
+
+
+# 4. COMPROBACIONES DE LA TRANSCRIPCION
+```{r}
+stopifnot(
+  nrow(cadena_opciones) == 11L,
+  !anyDuplicated(cadena_opciones$strike),
+  nrow(opciones) == 22L,
+  all(opciones$ask >= opciones$bid),
+  all(opciones$bid > 0),
+  all(opciones$T > 0)
+)
+cat("\nCadena registrada:", nrow(calls), "calls y", nrow(puts), "puts.\n")
+cat("Vencimiento:", format(fecha_vencimiento), "| S0:", S0, moneda, "\n")
+cat("Volumen no visible conservado como NA:", sum(is.na(opciones$volumen)), "filas.\n")
+cat("\nCall principal (strike mas cercano a S0):\n")
+print(call_principal[c("tipo", "strike", "bid", "ask", "mid", "T")], row.names = FALSE)
+```
+
+
+
+
+
+
+# 5. LEER EL EXCEL Data/NTR.NB.xlsx -------------------------------------------
+No se suponen nombres de columnas ni se limpian fechas/precios sin revisar
+antes la estructura del Excel. datos_ntr conserva la hoja tal como se importa.
+```{r}
+
+if (!file.exists(archivo_excel)) {
+  alternativa_xls <- file.path(carpeta_data, "NTR.NB.xls")
+  if (file.exists(alternativa_xls)) archivo_excel <- alternativa_xls
+}
+
+if (!file.exists(archivo_excel)) {
+  stop(
+    "La cadena ya se creo, pero no se encontro el Excel. Coloque NTR.NB.xlsx ",
+    "en la carpeta Data del proyecto, o ajuste carpeta_proyecto. Ruta buscada: ",
+    normalizePath(archivo_excel, winslash = "/", mustWork = FALSE),
+    call. = FALSE
+  )
+}
+
+if (!requireNamespace("readxl", quietly = TRUE)) {
+  install.packages("readxl", repos = "https://cloud.r-project.org")
+}
+if (!requireNamespace("readxl", quietly = TRUE)) {
+  stop("No se pudo cargar readxl; revise la instalacion del paquete.", call. = FALSE)
+}
+
+datos_ntr <- readxl::read_excel(
+  path = archivo_excel,
+  sheet = hoja_excel,
+  skip = saltar_filas_excel,
+  col_names = excel_tiene_encabezados
+)
+
+cat("\nExcel cargado:", normalizePath(archivo_excel, winslash = "/"), "\n")
+cat("Filas:", nrow(datos_ntr), "| Columnas:", ncol(datos_ntr), "\n")
+print(utils::head(datos_ntr))
+```
+
+
+
+
+
+
+
+
