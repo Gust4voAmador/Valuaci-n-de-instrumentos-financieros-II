@@ -1590,6 +1590,7 @@ Un porcentaje de $100\%$ significa que la brecha observada respecto de los preci
 Para realizar la comparación, cada call se empareja con una put que tenga exactamente el mismo *strike*, fecha de vencimiento y fecha de consulta.
 
 
+
 ```{r}
 ## -----------------------------------------------------------------------------
 ## Datos
@@ -1597,7 +1598,8 @@ Para realizar la comparación, cada call se empareja con una put que tenga exact
 cadena_opciones <- opciones$vencimiento   # la función usa este nombre
 S_PARIDAD <- 69.19 #Precio spot del activo een este caso la accion NTR
 r  <- r                              # <-- tasa libre de riesgo (continua)
-q  <- q                                # <-- dividendo continuo
+q  <- 0                                # <-- dividendo continuo
+
 cadena_opciones <- opciones %>%
   mutate(
     # Tiempo hasta vencimiento expresado en años
