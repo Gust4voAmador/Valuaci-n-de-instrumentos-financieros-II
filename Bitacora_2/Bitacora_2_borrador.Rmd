@@ -200,7 +200,7 @@ T <- as.numeric(
 ) / 365
 
 # Tasa anual continua: provisional, verificar con FRED
-r <- 0.0406
+r <- -log1p(-(3.91 / 100) * 28 / 360) * 365 / 28
 
 # Escenario sin dividendo confirmado antes del vencimiento
 q_referencia <- 0
