@@ -193,8 +193,6 @@ print(utils::head(datos_ntr))
 ```
 
 
-
-
 ```{r}
 # Tiempo hasta vencimiento
 T <- as.numeric(
