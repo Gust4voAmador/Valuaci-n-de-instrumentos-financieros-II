@@ -333,25 +333,13 @@ C$cp_alto <- C$call_ask - C$put_bid
 
 
 # Dividendo implicito con precios medios
-C$q_mid <- q_implicito_ntr(
-  C$cp_mid,
-  C$strike,
-  S0, r, T
-)
+C$q_mid <- q_implicito_ntr(C$cp_mid,C$strike,S0, r, T)
 
 # Banda inferior de q
-C$q_min <- q_implicito_ntr(
-  C$cp_alto,
-  C$strike,
-  S0, r, T
-)
+C$q_min <- q_implicito_ntr(C$cp_alto,C$strike,S0, r, T)
 
 # Banda superior de q
-C$q_max <- q_implicito_ntr(
-  C$cp_bajo,
-  C$strike,
-  S0, r, T
-)
+C$q_max <- q_implicito_ntr(C$cp_bajo,C$strike,S0, r, T)
 
 
 # Convertir a porcentajes anuales
@@ -360,11 +348,7 @@ C$q_min_pct <- 100 * C$q_min
 C$q_max_pct <- 100 * C$q_max
 
 # Verificar si la banda incluye q de referencia
-C$q_incluye_referencia <- with(
-  C,
-  q_min <= q_referencia &
-    q_max >= q_referencia
-)
+C$q_incluye_referencia <- with(C,q_min <= q_referencia &q_max >= q_referencia)
 
 cat("\n(c) DIVIDENDOS IMPLICITOS\n")
 
@@ -392,36 +376,24 @@ print(
 # F(K) = K + exp(r*T)*(C-P)
 
 # Forward usando precios medios
-C$f_mid <- C$strike +
-  exp(r * T) * C$cp_mid
+C$f_mid <- C$strike + exp(r * T) * C$cp_mid
 
 # Banda inferior
-C$f_min <- C$strike +
-  exp(r * T) * C$cp_bajo
+C$f_min <- C$strike + exp(r * T) * C$cp_bajo
 
 # Banda superior
-C$f_max <- C$strike +
-  exp(r * T) * C$cp_alto
+C$f_max <- C$strike + exp(r * T) * C$cp_alto
 
 
 # Forward teorico por costo de acarreo
-F_carry <- S0 * exp(
-  (r - q_referencia) * T
-)
+F_carry <- S0 * exp((r - q_referencia) * T)
 
 # Verificar si el forward teorico cae en la banda
-C$f_incluye_carry <- with(
-  C,
-  f_min <= F_carry &
-    f_max >= F_carry
-)
+C$f_incluye_carry <- with(C,f_min <= F_carry &f_max >= F_carry)
 
 # Residuo respecto a paridad europea de referencia
 C$residuo_paridad <- C$cp_mid -
-  (
-    S0 * exp(-q_referencia * T) -
-      C$strike * exp(-r * T)
-  )
+  (S0 * exp(-q_referencia * T) -C$strike * exp(-r * T))
 
 cat("\n(d) FORWARDS IMPLICITOS\n")
 
@@ -447,33 +419,21 @@ print(
 # ================================================================
 
 # Spread total de cada par call-put
-C$spread_par <- C$call_spread +
-  C$put_spread
+C$spread_par <- C$call_spread + C$put_spread
 
 # Spread relativo de la call
-C$spread_call_pct <- 100 *
-  C$call_spread / C$call_mid
+C$spread_call_pct <- 100 * C$call_spread / C$call_mid
 
 # Spread relativo de la put
-C$spread_put_pct <- 100 *
-  C$put_spread / C$put_mid
+C$spread_put_pct <- 100 * C$put_spread / C$put_mid
 
 # Ancho de la banda del forward sintetico
-C$ancho_forward_ejecutable <- C$f_max -
-  C$f_min
+C$ancho_forward_ejecutable <- C$f_max - C$f_min
 
 # Ultimos precios fuera del bid/ask
-C$last_call_fuera <- with(
-  C,
-  call_last < call_bid |
-    call_last > call_ask
-)
+C$last_call_fuera <- with(C,call_last < call_bid | call_last > call_ask)
 
-C$last_put_fuera <- with(
-  C,
-  put_last < put_bid |
-    put_last > put_ask
-)
+C$last_put_fuera <- with(C,put_last < put_bid | put_last > put_ask)
 
 cat("\n(e) FRICCIONES DE NEGOCIACION\n")
 
@@ -496,63 +456,28 @@ print(
 
 ```{r}
 # ================================================================
-# 13. VALORACION DE LA CALL PRINCIPAL
+# VALORACION DE LA CALL PRINCIPAL
 # ================================================================
 
-p <- C[
-  C$strike == K_principal,
-  ,
-  drop = FALSE
-]
+p <- C[C$strike == K_principal,,drop = FALSE]
 
 stopifnot(nrow(p) == 1L)
 
 
 # Black-Scholes con q de referencia
-precio_BS_q0 <- bs_q(
-  S0,
-  K_principal,
-  r,
-  sigma_principal,
-  T,
-  q_referencia,
-  "call"
-)
+precio_BS_q0 <- bs_q(S0,K_principal,r,sigma_principal,T,q_referencia,"call")
 
 
 # Black-Scholes con q implicito del strike principal
-precio_BS_qimpl <- bs_q(
-  S0,
-  K_principal,
-  r,
-  sigma_principal,
-  T,
-  p$q_mid,
-  "call"
-)
+precio_BS_qimpl <- bs_q(S0,K_principal,r,sigma_principal,T,p$q_mid,"call")
 
 
 # Black-76 usando forward por costo de acarreo
-precio_B76_carry <- black76(
-  F_carry,
-  K_principal,
-  r,
-  sigma_principal,
-  T,
-  "call"
-)
+precio_B76_carry <- black76(F_carry,K_principal,r,sigma_principal,T,"call")
 
 
 # Black-76 usando forward implicito
-precio_B76_impl <- black76(
-  p$f_mid,
-  K_principal,
-  r,
-  sigma_principal,
-  T,
-  "call"
-)
-
+precio_B76_impl <- black76(p$f_mid,K_principal,r,sigma_principal,T,"call")
 
 # ================================================================
 # 14. VERIFICACIONES DE CONSISTENCIA
@@ -683,7 +608,7 @@ cat(
 
 
 # ================================================================
-# 17. EXPORTAR RESULTADOS
+# EXPORTAR RESULTADOS
 # ================================================================
 
 carpeta_resultados <- file.path(
@@ -720,7 +645,7 @@ write.csv(
 
 
 # ================================================================
-# 18. GRAFICOS
+# GRAFICOS
 # ================================================================
 
 pdf(
@@ -834,7 +759,7 @@ dev.off()
 
 
 # ================================================================
-# 19. FINALIZACION
+# FINALIZACION
 # ================================================================
 
 cat("\n========================================\n")
