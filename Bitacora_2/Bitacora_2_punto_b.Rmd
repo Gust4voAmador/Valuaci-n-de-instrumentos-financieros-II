@@ -1,0 +1,106 @@
+---
+title: "Bitácora 2 · Punto (b)"
+author: "Gustavo Amador Fonseca C20451"
+output: html_document
+---
+
+```{r b-datos-independientes, include=FALSE}
+# Para compilar (b) por separado. Al incorporar (b) al Rmd de (a),
+# copiá desde el encabezado siguiente y reutilizá los objetos de (a).
+S0 <- 69.925
+K <- 70
+T <- 46 / 365
+mu <- 0.1196154500698875
+sigma <- 0.29581999517040275
+r <- -log1p(-(3.91 / 100) * 28 / 360) * 365 / 28
+q <- 0
+```
+
+# (b) Un evento, tres medidas
+
+Para la call de NTR del 18 de diciembre, definimos $A=\{S_T>K\}$, con $K=70$ USD. El evento es el mismo bajo las tres medidas: **la acción termina por encima de USD 70**. Retomamos los parámetros de (a) y la descomposición del laboratorio del 22 de octubre (capítulo 15, ejemplo 15.7).
+
+## 1. Separar el pago de la call
+
+Si ocurre $A$, recibimos una acción que vale $S_T$ y pagamos $K$. Si no ocurre, ambos flujos son cero. Por eso
+$$
+(S_T-K)^+=S_T\mathbf{1}_A-K\mathbf{1}_A.
+$$
+
+La primera parte se valora usando como numerario la inversión en acciones con dividendos reinvertidos, $V_t=e^{qt}S_t$. Al medir el pago en unidades de $V_T$, se simplifica a $S_T\mathbf{1}_A/V_T=e^{-qT}\mathbf{1}_A$. Multiplicando por $V_0=S_0$, obtenemos $S_0e^{-qT}\mathbb Q^V(A)$. La segunda parte es un pago fijo en dólares condicionado a $A$; con la cuenta bancaria como numerario y tasa constante, vale $Ke^{-rT}\mathbb Q(A)$. En conjunto,
+$$
+\boxed{c_0=S_0e^{-qT}\mathbb Q^V(A)-Ke^{-rT}\mathbb Q(A).}
+$$
+
+**¿Por qué $V$?** Si la acción distribuye dividendos continuos a tasa $q$, el precio exdividendo $S_t$ recoge solo el valor de una acción. Al reinvertir los dividendos, una acción inicial se convierte en $e^{qt}$ acciones: $V_t$ representa la riqueza de una estrategia autofinanciada que sí sirve como numerario. Para NTR usamos $q=0$ en estos 46 días según (a), de modo que $V_t=S_t$ durante la vida de la call.
+
+## 2. Simular el mismo evento bajo cada medida
+
+Para una deriva anual $b$, el precio terminal del GBM se simula con
+$$
+S_T=S_0\exp\!\left[(b-\tfrac12\sigma^2)T+\sigma\sqrt{T}\,Z\right],
+\qquad Z\sim N(0,1).
+$$
+
+| Medida | Deriva $b$ del precio | Qué representa |
+|---|---|---|
+| $\mathbb P$ | $\hat\mu$ | Frecuencia del evento según el modelo histórico. |
+| $\mathbb Q$ | $r-q$ | Probabilidad al valorar en unidades de la cuenta bancaria. |
+| $\mathbb Q^V$ | $r-q+\sigma^2$ | Probabilidad al valorar en unidades de la inversión en acciones. |
+
+El término adicional $\sigma^2$ surge porque el cambio al numerario $V$ desplaza el browniano: $dW^{\mathbb Q}=dW^{V}+\sigma\,dt$. Al sustituirlo en $dS/S=(r-q)dt+\sigma\,dW^{\mathbb Q}$, la deriva pasa a $r-q+\sigma^2$.
+
+```{r b-simulacion}
+set.seed(20261022)
+n_b <- 500000L
+z_b <- rnorm(n_b)  # Mismos sorteos para comparar las tres distribuciones.
+
+# Una simulación cuenta como 1 si la call termina dentro del dinero y 0 si no.
+evento_b <- function(deriva) {
+  precio_final <- S0 * exp((deriva - sigma^2 / 2) * T + sigma * sqrt(T) * z_b)
+  precio_final > K
+}
+
+derivas_b <- c(P = mu, Q = r - q, QV = r - q + sigma^2)
+indicadores_b <- sapply(derivas_b, evento_b)
+prob_mc_b <- colMeans(indicadores_b)
+```
+
+Cada columna simula $S_T$ directamente bajo su medida. Al promediar sus indicadores, estimamos $\hat p=N^{-1}\sum_i\mathbf{1}_{\{S_T^{(i)}>K\}}$.
+
+## 3. Comparar con las probabilidades teóricas
+
+Con $\Phi$ la distribución normal estándar acumulada (la $N$ del enunciado),
+$$
+d_2=\frac{\ln(S_0/K)+(r-q-\sigma^2/2)T}{\sigma\sqrt T},
+\qquad d_1=d_2+\sigma\sqrt T.
+$$
+Entonces $\mathbb Q(A)=\Phi(d_2)$ y $\mathbb Q^V(A)=\Phi(d_1)$. Bajo $\mathbb P$, reemplazamos $r-q$ por la deriva histórica $\hat\mu$ en la expresión de $d_2$.
+
+```{r b-probabilidades}
+d2_b <- (log(S0 / K) + (r - q - sigma^2 / 2) * T) / (sigma * sqrt(T))
+d1_b <- d2_b + sigma * sqrt(T)
+dP_b <- (log(S0 / K) + (mu - sigma^2 / 2) * T) / (sigma * sqrt(T))
+prob_teo_b <- c(P = pnorm(dP_b), Q = pnorm(d2_b), QV = pnorm(d1_b))
+
+# Para un indicador, el error estándar del promedio es √[p(1−p)/N].
+margen_b <- qnorm(0.975) * sqrt(prob_mc_b * (1 - prob_mc_b) / n_b)
+knitr::kable(data.frame(
+  Medida = names(prob_mc_b), MC = 100 * prob_mc_b, Teórica = 100 * prob_teo_b,
+  Inferior = 100 * (prob_mc_b - margen_b), Superior = 100 * (prob_mc_b + margen_b)
+), row.names = FALSE, digits = 3,
+caption = "Probabilidades en %. Las dos últimas columnas dan el IC de Monte Carlo al 95 %.")
+```
+
+Para NTR, la probabilidad teórica es **49.40 %** con la cuenta bancaria como numerario y **53.58 %** con la inversión en acciones. Esta última da mayor peso a escenarios con $S_T$ alto, precisamente aquellos donde es más probable superar el strike. La histórica es **53.22 %** y sirve como comparación; en el precio de la call intervienen las otras dos.
+
+## 4. Reconstruir el precio de la call
+
+```{r b-precio}
+activo_b <- S0 * exp(-q * T) * prob_mc_b[["QV"]]
+efectivo_b <- K * exp(-r * T) * prob_mc_b[["Q"]]
+precio_mc_b <- activo_b - efectivo_b
+precio_teo_b <- S0 * exp(-q * T) * pnorm(d1_b) - K * exp(-r * T) * pnorm(d2_b)
+```
+
+La parte que entrega la acción vale **USD `r sprintf("%.3f", activo_b)`** y el pago del strike vale **USD `r sprintf("%.3f", efectivo_b)`**. Su diferencia da **USD `r sprintf("%.3f", precio_mc_b)`** por acción mediante Monte Carlo. Con las probabilidades teóricas obtenemos **USD `r sprintf("%.3f", precio_teo_b)`**, la misma referencia de Black–Scholes que en (a). En (a) se repesaba el pago completo; aquí se valora cada parte usando el numerario que simplifica su cálculo.
