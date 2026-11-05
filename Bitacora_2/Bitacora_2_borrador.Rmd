@@ -1,6 +1,6 @@
 ---
 title: "Bitacora 2"
-author: "Gustavo Amador Fonseca C20451"
+author: "Gustavo Amador Fonseca C20451, Henri Gerard Gabert Hidalgo B93096"
 date: "2026-11-03"
 output: html_document
 ---
@@ -108,7 +108,7 @@ armar_opciones <- function(tipo, prefijo) {
   resultado$T <- resultado$dias_al_vencimiento / 365
   # Last puede ser una transaccion antigua: se registra sin reemplazarlo por mid.
   resultado$last_fuera_bid_ask <- with(resultado, last < bid | last > ask)
-  resultado
+  return(resultado)
 }
 
 ```
@@ -194,6 +194,669 @@ print(utils::head(datos_ntr))
 
 
 
+
+```{r}
+# Tiempo hasta vencimiento
+T <- as.numeric(
+  fecha_vencimiento - fecha_valoracion
+) / 365
+
+# Tasa anual continua: provisional, verificar con FRED
+r <- 0.0406
+
+# Escenario sin dividendo confirmado antes del vencimiento
+q_referencia <- 0
+
+# Contrato principal
+K_principal <- 70
+
+# Volatilidad implicita de pantalla, call K = 70
+sigma_principal <- 35.5147 / 100
+
+# Precio de la Bitacora 1 si se dispone de uno comparable
+precio_bitacora1 <- NA_real_
+
+stopifnot(T > 0,S0 > 0,is.finite(r),sigma_principal > 0)
+
+# ================================================================
+# FUNCIONES DE VALORACION
+# ================================================================
+
+# Black-Scholes con dividendo continuo.
+# Bjork: Proposicion 16.9.
+
+bs_q <- function(S, K, r, sigma, tau, q = 0, tipo = c("call", "put")) {
+  tipo <- match.arg(tipo)
+  n <- max(length(S), length(K), length(tau))
+  S <- rep_len(S, n); K <- rep_len(K, n); tau <- rep_len(tau, n)
+  Sq <- S * exp(-q * pmax(tau, 0))
+  fwd <- Sq - K * exp(-r * pmax(tau, 0))
+  out <- if (tipo == "call") pmax(fwd, 0) else pmax(-fwd, 0)
+  vivo <- tau > 0 & sigma > 0
+  if (any(vivo)) {
+    s <- Sq[vivo]; k <- K[vivo]; tt <- tau[vivo]
+    d1 <- (log(s / k) + (r + sigma^2 / 2) * tt) / (sigma * sqrt(tt))
+    d2 <- d1 - sigma * sqrt(tt)
+    out[vivo] <- if (tipo == "call") s * pnorm(d1) - k * exp(-r * tt) * pnorm(d2)
+                 else k * exp(-r * tt) * pnorm(-d2) - s * pnorm(-d1)
+  }
+  out
+}
+
+
+# Black-76.
+# Bjork: Proposicion 17.9.
+
+black76 <- function(F, K, r, sigma, tau, tipo = "call") {
+  bs_q(F, K, r, sigma, tau, q = r, tipo = tipo)
+}
+
+
+# Dividendo implicito a partir de la paridad.
+# La paridad utilizada es EUROPEA.
+
+q_implicito_ntr <- function(cp, K, S, tasa, plazo) {
+  argumento <- (cp + K * exp(-tasa * plazo)) / S
+
+  resultado <- ifelse(argumento > 0,-log(argumento) / plazo,NA_real_)
+
+  return(resultado)
+}
+
+
+# ================================================================
+# VERIFICACION: CASO DEL CURSO
+# ================================================================
+
+# S0 = K = 100
+# r = 5 %
+# sigma = 20 %
+# T = 1
+# q = 3 %
+
+caso_c <- bs_q(100, 100, 0.05, 0.20, 1, 0.03, "call")
+
+caso_p <- bs_q(100, 100, 0.05, 0.20, 1, 0.03, "put")
+
+caso_d1 <- (0.05 - 0.03 + 0.5 * 0.20^2) / 0.20
+
+caso_f <- 100 * exp((0.05 - 0.03) * 1)
+
+caso_q <- q_implicito_ntr(caso_c-caso_p,100, 100, 0.05, 1)
+
+caso_black76 <- black76(caso_f, 100, 0.05, 0.20, 1)
+
+stopifnot(
+  abs(caso_c - 8.6525) < 1e-4,
+  abs(pnorm(caso_d1) - 0.5793) < 1e-4,
+  abs(caso_f - 102.02) < 0.005,
+  abs(caso_q - 0.03) < 1e-10,
+  abs(caso_c - caso_black76) < 1e-10
+)
+
+cat("\nVERIFICACION DEL CASO DEL CURSO\n")
+
+print(data.frame(
+  Call_BS = caso_c,
+  Probabilidad_Nd1 = pnorm(caso_d1),
+  Forward = caso_f,
+  Dividendo_implicito = caso_q,
+  Call_Black76 = caso_black76
+))
+
+
+```
+
+```{r}
+# ================================================================
+# APARTADO (c): DIVIDENDO IMPLICITO
+# ================================================================
+
+# Paridad europea con dividendos:
+#
+# C - P = S0*exp(-q*T) - K*exp(-r*T)
+#
+# Despejando:
+#
+# q(K) = -log[(C-P+K*exp(-r*T))/S0]/T
+
+C <- cadena_opciones
+
+# Diferencia Call - Put con precios medios
+C$cp_mid <- C$call_mid - C$put_mid
+
+# Extremo inferior de C-P
+C$cp_bajo <- C$call_bid - C$put_ask
+
+# Extremo superior de C-P
+C$cp_alto <- C$call_ask - C$put_bid
+
+
+# Dividendo implicito con precios medios
+C$q_mid <- q_implicito_ntr(
+  C$cp_mid,
+  C$strike,
+  S0, r, T
+)
+
+# Banda inferior de q
+C$q_min <- q_implicito_ntr(
+  C$cp_alto,
+  C$strike,
+  S0, r, T
+)
+
+# Banda superior de q
+C$q_max <- q_implicito_ntr(
+  C$cp_bajo,
+  C$strike,
+  S0, r, T
+)
+
+
+# Convertir a porcentajes anuales
+C$q_mid_pct <- 100 * C$q_mid
+C$q_min_pct <- 100 * C$q_min
+C$q_max_pct <- 100 * C$q_max
+
+# Verificar si la banda incluye q de referencia
+C$q_incluye_referencia <- with(
+  C,
+  q_min <= q_referencia &
+    q_max >= q_referencia
+)
+
+cat("\n(c) DIVIDENDOS IMPLICITOS\n")
+
+print(
+  C[
+    c(
+      "strike",
+      "q_mid_pct",
+      "q_min_pct",
+      "q_max_pct",
+      "q_incluye_referencia"
+    )
+  ],
+  digits = 6,
+  row.names = FALSE
+)
+```
+
+```{r}
+# ================================================================
+# APARTADO (d): FORWARD IMPLICITO
+# ================================================================
+
+# Paridad:
+# F(K) = K + exp(r*T)*(C-P)
+
+# Forward usando precios medios
+C$f_mid <- C$strike +
+  exp(r * T) * C$cp_mid
+
+# Banda inferior
+C$f_min <- C$strike +
+  exp(r * T) * C$cp_bajo
+
+# Banda superior
+C$f_max <- C$strike +
+  exp(r * T) * C$cp_alto
+
+
+# Forward teorico por costo de acarreo
+F_carry <- S0 * exp(
+  (r - q_referencia) * T
+)
+
+# Verificar si el forward teorico cae en la banda
+C$f_incluye_carry <- with(
+  C,
+  f_min <= F_carry &
+    f_max >= F_carry
+)
+
+# Residuo respecto a paridad europea de referencia
+C$residuo_paridad <- C$cp_mid -
+  (
+    S0 * exp(-q_referencia * T) -
+      C$strike * exp(-r * T)
+  )
+
+cat("\n(d) FORWARDS IMPLICITOS\n")
+
+print(
+  C[
+    c(
+      "strike",
+      "f_mid",
+      "f_min",
+      "f_max",
+      "f_incluye_carry"
+    )
+  ],
+  digits = 6,
+  row.names = FALSE
+)
+
+```
+
+```{r}
+# ================================================================
+# APARTADO (e): FRICCIONES DE NEGOCIACION
+# ================================================================
+
+# Spread total de cada par call-put
+C$spread_par <- C$call_spread +
+  C$put_spread
+
+# Spread relativo de la call
+C$spread_call_pct <- 100 *
+  C$call_spread / C$call_mid
+
+# Spread relativo de la put
+C$spread_put_pct <- 100 *
+  C$put_spread / C$put_mid
+
+# Ancho de la banda del forward sintetico
+C$ancho_forward_ejecutable <- C$f_max -
+  C$f_min
+
+# Ultimos precios fuera del bid/ask
+C$last_call_fuera <- with(
+  C,
+  call_last < call_bid |
+    call_last > call_ask
+)
+
+C$last_put_fuera <- with(
+  C,
+  put_last < put_bid |
+    put_last > put_ask
+)
+
+cat("\n(e) FRICCIONES DE NEGOCIACION\n")
+
+print(
+  C[
+    c(
+      "strike",
+      "call_spread",
+      "put_spread",
+      "spread_par",
+      "spread_call_pct",
+      "spread_put_pct"
+    )
+  ],
+  digits = 5,
+  row.names = FALSE
+)
+
+```
+
+```{r}
+# ================================================================
+# 13. VALORACION DE LA CALL PRINCIPAL
+# ================================================================
+
+p <- C[
+  C$strike == K_principal,
+  ,
+  drop = FALSE
+]
+
+stopifnot(nrow(p) == 1L)
+
+
+# Black-Scholes con q de referencia
+precio_BS_q0 <- bs_q(
+  S0,
+  K_principal,
+  r,
+  sigma_principal,
+  T,
+  q_referencia,
+  "call"
+)
+
+
+# Black-Scholes con q implicito del strike principal
+precio_BS_qimpl <- bs_q(
+  S0,
+  K_principal,
+  r,
+  sigma_principal,
+  T,
+  p$q_mid,
+  "call"
+)
+
+
+# Black-76 usando forward por costo de acarreo
+precio_B76_carry <- black76(
+  F_carry,
+  K_principal,
+  r,
+  sigma_principal,
+  T,
+  "call"
+)
+
+
+# Black-76 usando forward implicito
+precio_B76_impl <- black76(
+  p$f_mid,
+  K_principal,
+  r,
+  sigma_principal,
+  T,
+  "call"
+)
+
+
+# ================================================================
+# 14. VERIFICACIONES DE CONSISTENCIA
+# ================================================================
+
+# Black-76 y Black-Scholes deben coincidir cuando
+# sus forwards y dividendos son consistentes.
+
+stopifnot(
+  abs(precio_BS_q0 - precio_B76_carry) < 1e-9,
+  abs(precio_BS_qimpl - precio_B76_impl) < 1e-9,
+  all(C$q_min <= C$q_max, na.rm = TRUE),
+  all(C$f_min <= C$f_max)
+)
+
+cat("\nVERIFICACIONES DE CONSISTENCIA: OK\n")
+
+
+# ================================================================
+# 15. RESULTADOS DE LA CALL PRINCIPAL
+# ================================================================
+
+cat("\nRESULTADOS DE LA CALL PRINCIPAL\n")
+
+cat("Strike:", K_principal, "\n")
+cat("Precio accion:", S0, "\n")
+cat("Volatilidad implicita:", sigma_principal, "\n")
+
+cat(
+  "Mercado bid:", p$call_bid,
+  "| mid:", p$call_mid,
+  "| ask:", p$call_ask, "\n"
+)
+
+cat(
+  "Dividendo implicito (% anual):",
+  round(100 * p$q_mid, 6), "\n"
+)
+
+cat(
+  "Forward por costo de acarreo:",
+  round(F_carry, 6), "\n"
+)
+
+cat(
+  "Forward implicito:",
+  round(p$f_mid, 6), "\n"
+)
+
+cat(
+  "Black-Scholes con q referencia:",
+  round(precio_BS_q0, 6), "\n"
+)
+
+cat(
+  "Black-Scholes con q implicito:",
+  round(precio_BS_qimpl, 6), "\n"
+)
+
+cat(
+  "Black-76 con forward carry:",
+  round(precio_B76_carry, 6), "\n"
+)
+
+cat(
+  "Black-76 con forward implicito:",
+  round(precio_B76_impl, 6), "\n"
+)
+
+cat(
+  "Diferencia BS(q referencia) - mercado mid:",
+  round(precio_BS_q0 - p$call_mid, 6),
+  "USD\n"
+)
+
+cat(
+  "Spread call:",
+  p$call_spread,
+  "USD\n"
+)
+
+cat(
+  "Spread put:",
+  p$put_spread,
+  "USD\n"
+)
+
+cat(
+  "Spread combinado:",
+  p$spread_par,
+  "USD\n"
+)
+
+
+# ================================================================
+# 16. RESUMEN DE VERIFICACIONES DE LA CADENA
+# ================================================================
+
+cat("\nRESUMEN DE LA CADENA\n")
+
+cat(
+  "Bandas de q que contienen q referencia:",
+  sum(C$q_incluye_referencia, na.rm = TRUE),
+  "de", nrow(C), "\n"
+)
+
+cat(
+  "Bandas de forward que contienen el carry:",
+  sum(C$f_incluye_carry, na.rm = TRUE),
+  "de", nrow(C), "\n"
+)
+
+cat(
+  "Calls con last fuera de bid/ask:",
+  sum(C$last_call_fuera, na.rm = TRUE), "\n"
+)
+
+cat(
+  "Puts con last fuera de bid/ask:",
+  sum(C$last_put_fuera, na.rm = TRUE), "\n"
+)
+
+cat(
+  "\nADVERTENCIA: La paridad utilizada es europea.",
+  "Las opciones americanas pueden presentar diferencias",
+  "debido al ejercicio anticipado.\n"
+)
+
+
+# ================================================================
+# 17. EXPORTAR RESULTADOS
+# ================================================================
+
+carpeta_resultados <- file.path(
+  carpeta_proyecto,
+  "Resultados_Bitacora2"
+)
+
+dir.create(
+  carpeta_resultados,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+write.csv(
+  C,
+  file.path(carpeta_resultados, "paridad_forward_NTR.csv"),
+  row.names = FALSE,
+  na = ""
+)
+
+write.csv(
+  opciones,
+  file.path(carpeta_resultados, "opciones_formato_largo_NTR.csv"),
+  row.names = FALSE,
+  na = ""
+)
+
+write.csv(
+  registro_capturas,
+  file.path(carpeta_resultados, "registro_capturas.csv"),
+  row.names = FALSE,
+  na = ""
+)
+
+
+# ================================================================
+# 18. GRAFICOS
+# ================================================================
+
+pdf(
+  file.path(carpeta_resultados, "graficos_cde_NTR.pdf"),
+  width = 11,
+  height = 8
+)
+
+par(
+  mfrow = c(2, 2),
+  mar = c(4.5, 4.4, 3, 1)
+)
+
+
+# Grafico 1: dividendos implicitos
+plot(
+  C$strike,
+  C$q_mid_pct,
+  pch = 19,
+  ylim = range(
+    C$q_min_pct,
+    C$q_max_pct,
+    0,
+    na.rm = TRUE
+  ),
+  xlab = "Strike",
+  ylab = "q implicito anual (%)",
+  main = "(c) Dividendo implicito"
+)
+
+arrows(
+  C$strike, C$q_min_pct,
+  C$strike, C$q_max_pct,
+  code = 3,
+  angle = 90,
+  length = 0.035,
+  col = "gray50"
+)
+
+abline(
+  h = 100 * q_referencia,
+  col = "steelblue",
+  lty = 2,
+  lwd = 2
+)
+
+
+# Grafico 2: forwards
+plot(
+  C$strike,
+  C$f_mid,
+  pch = 19,
+  ylim = range(
+    C$f_min,
+    C$f_max,
+    F_carry
+  ),
+  xlab = "Strike",
+  ylab = "Forward (USD)",
+  main = "(d) Forward implicito"
+)
+
+arrows(
+  C$strike, C$f_min,
+  C$strike, C$f_max,
+  code = 3,
+  angle = 90,
+  length = 0.035,
+  col = "gray50"
+)
+
+abline(
+  h = F_carry,
+  col = "steelblue",
+  lty = 2,
+  lwd = 2
+)
+
+
+# Grafico 3: paridad
+plot(
+  C$strike,
+  C$cp_mid,
+  pch = 19,
+  xlab = "Strike",
+  ylab = "Call mid - Put mid",
+  main = "(c-d) Paridad europea"
+)
+
+lines(
+  C$strike,
+  S0 * exp(-q_referencia * T) -
+    C$strike * exp(-r * T),
+  col = "steelblue",
+  lwd = 2
+)
+
+
+# Grafico 4: spreads
+plot(
+  C$strike,
+  C$spread_par,
+  type = "b",
+  pch = 19,
+  xlab = "Strike",
+  ylab = "Spread call + put (USD)",
+  main = "(e) Fricciones del par sintetico"
+)
+
+dev.off()
+
+
+# ================================================================
+# 19. FINALIZACION
+# ================================================================
+
+cat("\n========================================\n")
+cat("BITACORA 2 - ANALISIS FINALIZADO\n")
+cat("========================================\n")
+
+cat(
+  "Resultados guardados en:",
+  normalizePath(carpeta_resultados),
+  "\n"
+)
+
+cat(
+  "Archivo principal:",
+  "paridad_forward_NTR.csv\n"
+)
+
+cat(
+  "Graficos:",
+  "graficos_cde_NTR.pdf\n"
+)
+```
 
 
 
