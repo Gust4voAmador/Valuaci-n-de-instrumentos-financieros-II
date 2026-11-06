@@ -470,6 +470,11 @@ if (is.finite(precio_bitacora1)) {
   cat("Precio bitacora 1: PENDIENTE (rellenar precio_bitacora1).\n")
 }
 
+   C$call_ask_bajo_cota <- C$call_ask <
+     pmax(S0 * exp(-q_referencia * T) - C$strike * exp(-r * T), 0)
+   C$put_ask_bajo_intrinseco <- C$put_ask < pmax(C$strike - S0, 0)
+   cat("Calls con ask bajo la cota:", sum(C$call_ask_bajo_cota),
+       "| Puts con ask bajo el valor intrinseco:", sum(C$put_ask_bajo_intrinseco), "\n")
 # ---- 7. Verificaciones --------------------------------------------
 stopifnot(
   all(C$q_min <= C$q_max, na.rm = TRUE),
