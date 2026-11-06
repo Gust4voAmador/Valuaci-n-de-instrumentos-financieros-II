@@ -1,0 +1,5 @@
+"Verificacion","Cantidad","Total"
+"Bandas de q que contienen la referencia",11,11
+"Bandas de forward que contienen el carry",11,11
+"Calls con last fuera del bid-ask",2,11
+"Puts con last fuera del bid-ask",5,11

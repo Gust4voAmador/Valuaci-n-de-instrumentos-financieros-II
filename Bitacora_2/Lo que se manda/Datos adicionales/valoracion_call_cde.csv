@@ -1,0 +1,5 @@
+"Metodo","Precio_USD","Diferencia_mid"
+"BS con q de referencia",3.64675966864137,0.046759668641366
+"BS con q implícito",3.63366486399197,0.0336648639919748
+"Black-76 con carry",3.64675966864137,0.046759668641366
+"Black-76 con forward implícito",3.63366486399197,0.0336648639919748
