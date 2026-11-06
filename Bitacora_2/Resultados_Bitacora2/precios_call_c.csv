@@ -1,0 +1,4 @@
+"modelo","precio","vs_mid","dentro_bid_ask"
+"BS, IV propia, q = q ref.",3.64675966864137,0.046759668641366,TRUE
+"BS, IV propia, q = q implicito (Prop. 16.9)",3.63366486399197,0.0336648639919748,TRUE
+"BS, IV vecinos (67.5 y 72.5), q = q ref.",3.68506743963609,0.0850674396360862,TRUE

@@ -1,0 +1,5 @@
+"escenario","precio_call","dentro_bid_ask"
+"Real: sin ex-dividendo en el plazo (q = 0)",3.64675966864137,TRUE
+"Real: discreto declarado (VP = 0)",3.64675966864137,TRUE
+"Supuesto continuo, q anual indicativo",3.49974644936102,TRUE
+"Hipotetico: 0.55 el 1-dic (ajuste VP)",3.35884697930702,TRUE
