@@ -1,0 +1,352 @@
+---
+title: "Bitacora_3 Borrador"
+author: "Gustavo Amador Fonseca C20451"
+date: "2026-11-25"
+output: html_document
+---
+
+# Preparación de datos
+
+## Parámetros
+
+```{r parametros, message=FALSE, warning=FALSE}
+library(readxl)
+
+fecha_valoracion <- as.Date("2026-11-24")
+fecha_inicio    <- as.Date("2021-11-24")
+vencimiento     <- as.Date("2027-01-15")
+
+S0 <- 66.33
+K  <- 67.50
+
+dias <- as.numeric(vencimiento - fecha_valoracion)
+T    <- dias / 365
+```
+
+## Curva par del Tesoro
+
+Las tasas se conservan en porcentaje y en decimal.
+
+```{r importar-curva}
+tesoro <- read.csv(
+  "daily-treasury-rates.csv",
+  check.names = FALSE,
+  na.strings = c("", "N/A", "NA", ".")
+)
+
+tesoro$Date <- as.Date(tesoro$Date, format = "%m/%d/%Y")
+
+# Seleccionar la fecha de valoración.
+fila <- tesoro[tesoro$Date == fecha_valoracion, ]
+
+# Columnas correspondientes a plazos.
+columnas <- grep(
+  "^[0-9.]+\\s+(Mo|Month|Yr|Year)$",
+  names(tesoro),
+  ignore.case = TRUE
+)
+
+plazos <- names(tesoro)[columnas]
+
+# Convertir las etiquetas de plazo a años.
+plazo_anios <- as.numeric(sub("\\s+.*", "", plazos))
+
+plazo_anios <- plazo_anios / ifelse(
+  grepl("mo", plazos, ignore.case = TRUE),
+  12,
+  1
+)
+
+curva_par <- data.frame(
+  plazo = plazos,
+  plazo_anios = plazo_anios,
+  tasa_pct = as.numeric(unlist(fila[columnas]))
+)
+
+curva_par$tasa <- curva_par$tasa_pct / 100
+
+curva_par <- curva_par[order(curva_par$plazo_anios), ]
+rownames(curva_par) <- NULL
+
+curva_par
+```
+
+## Histórico diario de la tasa a tres meses
+
+`dtb3` conserva los datos faltantes; `dtb3_validos` contiene las observaciones disponibles.
+
+```{r importar-dtb3}
+datos_dtb3 <- read_excel(
+  "DTB3.xlsx",
+  sheet = "Daily",
+  na = c("", ".", "NA", "N/A")
+)
+
+dtb3 <- data.frame(
+  fecha = as.Date(datos_dtb3$observation_date),
+  tasa_pct = as.numeric(datos_dtb3$DTB3)
+)
+
+dtb3$tasa <- dtb3$tasa_pct / 100
+
+dtb3 <- subset(
+  dtb3,
+  fecha >= fecha_inicio & fecha <= fecha_valoracion
+)
+
+dtb3 <- dtb3[order(dtb3$fecha), ]
+rownames(dtb3) <- NULL
+
+dtb3_validos <- subset(dtb3, !is.na(tasa))
+
+head(dtb3)
+tail(dtb3)
+```
+
+## Opciones de Nutrien: 15 de enero de 2027
+
+Cotizaciones transcritas de la captura del 24 de noviembre de 2026. Los precios están expresados en USD por acción.
+
+### Calls
+
+```{r datos-calls}
+calls <- read.table(
+  header = TRUE,
+  text = "
+strike bid ask last volumen interes_abierto IV_pct delta
+55.0 10.90 12.90 10.20 0 178 40.7416 0.9213
+57.5 9.10 10.40 7.99 0 234 40.6569 0.8629
+60.0 6.70 8.10 6.45 0 955 34.5330 0.8184
+62.5 5.20 6.00 4.40 0 86 34.6820 0.7145
+65.0 3.60 4.00 3.70 2 303 33.7911 0.5983
+67.5 2.40 3.00 2.90 1 256 32.9173 0.4723
+70.0 1.40 2.00 1.73 10 2102 31.9903 0.3476
+72.5 0.95 1.40 1.15 18 2471 33.3601 0.2548
+75.0 0.35 0.80 0.60 5 2185 31.0923 0.1531
+77.5 0.25 0.55 0.20 0 380 32.6433 0.1083
+80.0 0.10 0.50 0.22 32 3472 34.7572 0.0807
+"
+)
+
+calls$tipo <- "call"
+```
+
+### Puts
+
+```{r datos-puts}
+puts <- read.table(
+  header = TRUE,
+  text = "
+strike bid ask last volumen interes_abierto IV_pct delta
+55.0 0.05 0.60 0.65 0 950 36.2395 -0.0762
+57.5 0.40 0.70 0.55 0 114 34.2851 -0.1237
+60.0 0.80 1.15 0.95 1 4678 33.3020 -0.1999
+62.5 1.40 1.85 1.47 14 348 32.3901 -0.3004
+65.0 2.00 2.95 3.50 0 1402 30.7392 -0.4201
+67.5 3.50 4.40 4.65 0 88 32.3697 -0.5468
+70.0 4.60 5.70 5.48 1 283 27.6764 -0.6969
+72.5 6.50 7.60 8.75 0 158 26.8212 -0.8132
+75.0 8.60 10.30 10.95 0 1661 31.3340 -0.8528
+77.5 10.80 12.20 13.35 0 124 25.0769 -0.9559
+80.0 13.00 15.20 16.50 0 393 29.3793 -0.9583
+"
+)
+
+puts$tipo <- "put"
+```
+
+### Preparación de la cadena
+
+```{r preparar-opciones}
+opciones_enero <- rbind(calls, puts)
+
+opciones_enero$fecha       <- fecha_valoracion
+opciones_enero$vencimiento <- vencimiento
+opciones_enero$S0          <- S0
+opciones_enero$T           <- T
+opciones_enero$estilo      <- "americana"
+
+opciones_enero$mid <- (
+  opciones_enero$bid + opciones_enero$ask
+) / 2
+
+opciones_enero$sigma_implicita <- opciones_enero$IV_pct / 100
+opciones_enero
+```
+
+### Call y put seleccionadas
+
+```{r seleccionar-opciones}
+call_enero <- subset(
+  opciones_enero,
+  tipo == "call" & strike == K
+)
+
+put_enero <- subset(
+  opciones_enero,
+  tipo == "put" & strike == K
+)
+
+# Valores individuales para usar directamente en cálculos.
+C_mercado <- call_enero$mid
+P_mercado <- put_enero$mid
+
+sigma_call <- call_enero$sigma_implicita
+sigma_put  <- put_enero$sigma_implicita
+
+data.frame(
+  S0 = S0,
+  K = K,
+  dias = dias,
+  T = T,
+  C_mercado = C_mercado,
+  P_mercado = P_mercado,
+  sigma_call = sigma_call,
+  sigma_put = sigma_put
+)
+```
+
+
+
+## Construcción de la curva cupón cero
+
+Se aplica bootstrap con cupones semestrales y nominal unitario.
+Las tasas par faltantes se interpolan linealmente.
+
+Para plazos menores de seis meses se utiliza descuento simple.
+Después del bootstrap se interpola linealmente el logaritmo
+de los factores de descuento.
+
+### Tasas par en la malla semestral
+
+```{r malla-semestral}
+# Vencimientos: 0.5, 1, 1.5, ..., 30 años.
+tiempos_sem <- seq(
+  from = 0.5,
+  to = max(curva_par$plazo_anios),
+  by = 0.5
+)
+
+# Completar las tasas par mediante interpolación lineal.
+tasas_sem <- approx(
+  x = curva_par$plazo_anios,
+  y = curva_par$tasa,
+  xout = tiempos_sem,
+  method = "linear"
+)$y
+```
+
+### Bootstrap de factores de descuento
+
+```{r bootstrap}
+descuentos_sem <- numeric(length(tiempos_sem))
+
+for (n in seq_along(tiempos_sem)) {
+
+  cupon <- tasas_sem[n] / 2
+
+  # Para n = 1, esta suma es cero.
+  suma_descuentos <- sum(
+    descuentos_sem[seq_len(n - 1)]
+  )
+
+  descuentos_sem[n] <- (
+    1 - cupon * suma_descuentos
+  ) / (1 + cupon)
+}
+
+curva_sem <- data.frame(
+  plazo_anios = tiempos_sem,
+  tasa_par = tasas_sem,
+  descuento = descuentos_sem
+)
+descuentos_sem
+```
+
+### Incorporación de los plazos menores de seis meses
+
+```{r tramo-corto}
+cortos <- subset(curva_par, plazo_anios < 0.5)
+
+curva_corta <- data.frame(
+  plazo_anios = cortos$plazo_anios,
+  tasa_par = cortos$tasa,
+  descuento = 1 / (1 + cortos$tasa * cortos$plazo_anios)
+)
+
+curva_cero <- rbind(curva_corta, curva_sem)
+
+curva_cero <- curva_cero[
+  order(curva_cero$plazo_anios),
+]
+
+rownames(curva_cero) <- NULL
+
+# Tasas cero con capitalización continua.
+curva_cero$tasa_cero <- (
+  -log(curva_cero$descuento) / curva_cero$plazo_anios
+)
+
+curva_cero$tasa_cero_pct <- 100 * curva_cero$tasa_cero
+
+head(curva_cero, 10)
+```
+
+### Funciones para consultar cualquier plazo
+
+```{r funciones-curva}
+# Incluir el origen: p(0,0) = 1 y log(p(0,0)) = 0.
+log_p0 <- approxfun(
+  x = c(0, curva_cero$plazo_anios),
+  y = c(0, log(curva_cero$descuento)),
+  method = "linear",
+  rule = 1
+)
+
+# Factor de descuento p(0,t).
+p0 <- function(t) {
+  exp(log_p0(t))
+}
+
+# Tasa cero continua y(0,t), en decimal.
+y0 <- function(t) {
+  ifelse(t > 0, -log_p0(t) / t, NA_real_)
+}
+```
+
+### Descuento al vencimiento de las opciones
+
+```{r descuento-opciones}
+# T ya fue definido como días al vencimiento / 365.
+P_T <- p0(T)
+r_T <- y0(T)
+
+data.frame(
+  vencimiento = vencimiento,
+  plazo_anios = T,
+  descuento = P_T,
+  tasa_cero = r_T,
+  tasa_cero_pct = 100 * r_T
+)
+```
+
+
+### Tasas forward por intervalo
+
+```{r forwards-curva}
+tiempos <- c(0, curva_cero$plazo_anios)
+log_descuentos <- c(0, log(curva_cero$descuento))
+
+curva_forward <- data.frame(
+  desde = head(tiempos, -1),
+  hasta = tail(tiempos, -1),
+  forward_continua = -diff(log_descuentos) / diff(tiempos)
+)
+
+curva_forward$forward_pct <- (
+  100 * curva_forward$forward_continua
+)
+
+head(curva_forward, 10)
+```
+
