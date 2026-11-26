@@ -1,6 +1,6 @@
 ---
 title: "Bitacora_3 Borrador"
-author: "Gustavo Amador Fonseca C20451"
+author: "Gustavo Amador Fonseca C20451, Henri Gerard Gabert Hidalgo B93096" 
 date: "2026-11-25"
 output: html_document
 ---
@@ -351,9 +351,7 @@ head(curva_forward, 10)
 ```
 
 
-# Tareas (a) y (b) de la Bitácora 3
-
-Estas secciones van después de «Tasas forward por intervalo». Usan los objetos ya construidos: `curva_par`, `curva_sem`, `curva_cero`, `p0()`, `y0()`, `curva_forward`, `dtb3` y `dtb3_validos`, además de `fecha_valoracion`, `fecha_inicio`, `T` y `vencimiento`. No vuelven a construir la curva ni modifican ninguno de esos objetos; al final un chequeo lo verifica.
+# Tareas (a) y (b)
 
 ## Configuración y herramientas
 
@@ -392,13 +390,10 @@ chequeo <- function(nombre, valor, referencia, pasa, podia_fallar = TRUE, nota =
 # --- Cap. 19 ---
 tasa_swap   <- function(p_T0, p_Ti, delta) (p_T0 - p_Ti[length(p_Ti)]) / (delta * sum(p_Ti))  # Prop. 19.8
 precio_bono <- function(cpn, p_Ti, delta) cpn * delta * sum(p_Ti) + p_Ti[length(p_Ti)]       # (19.17)
-p_base <- function(t) exp(-(0.05 * t - 0.02 * (1 - exp(-t))))   # caso base 9/11: f = 0.05 - 0.02 e^{-T}
+p_base <- function(t) exp(-(0.05 * t - 0.02 * (1 - exp(-t))))   
+# caso base 9/11: f = 0.05 - 0.02 e^{-T}
 
-# La misma construccion de la seccion «Construccion de la curva cupon cero», como funcion,
-# para (1) verificar que reproduce curva_cero, (2) correr el caso de control del curso y
-# (3) medir la sensibilidad a dos decisiones: la interpolacion de las tasas par y el tramo corto.
-#   interp = "lineal" (la de ustedes) o "spline" (monotona)
-#   corto  = "simple" (la de ustedes: 1/(1 + c t)) o "semestral" (la del lab del 12/11: (1 + c/2)^(-2t))
+
 curva_variante <- function(cp, interp = c("lineal", "spline"), corto = c("simple", "semestral")) {
   interp <- match.arg(interp); corto <- match.arg(corto)
   cp <- cp[!is.na(cp$tasa), ]; cp <- cp[order(cp$plazo_anios), ]
@@ -466,8 +461,10 @@ Estos son los casos de la guía de la Bitácora 3. Si alguno falla, nada de lo q
 ```{r b3-controles}
 p5b <- p_base(5)
 chequeo("p(0,5), curva f = 0.05 - 0.02 e^{-T}", sprintf("%.6f", p5b), "0.794427", abs(p5b - 0.794427) < 5e-7)
+
 Rb <- tasa_swap(1, p_base(1:5), 1)
 chequeo("tasa swap anual a 5 anios, caso base (Prop. 19.8)", pct(Rb, 4), "4.6822 %", abs(100 * Rb - 4.6822) < 5e-5)
+
 pv5 <- p_vas(5, 0.03, 0.5, 0.025, 0.01)
 chequeo("Vasicek p(0,5), a=0.5 b=0.025 sigma=0.01 r0=3 %", sprintf("%.6f", pv5), "0.808302", abs(pv5 - 0.808302) < 5e-7)
 
@@ -630,15 +627,19 @@ png(file.path(DIR_FIG, "a_curva_hoy.png"), width = 1700, height = 750, res = 150
 ```{r b3-b-datos}
 r_dtb3 <- if (CONVERSION_DTB3 == "continua") -log(1 - dtb3_validos$tasa * DIAS_LETRA / 360) / (DIAS_LETRA / 365) else
   dtb3_validos$tasa
+
 fechas_dtb3 <- dtb3_validos$fecha
 r0 <- tail(r_dtb3, 1); fecha_r0 <- tail(fechas_dtb3, 1)
+
 cat(sprintf("  DTB3 %s a %s: %d filas, %d sin dato descartadas, quedan %d\n",
             fecha_inicio, fecha_valoracion, nrow(dtb3), nrow(dtb3) - nrow(dtb3_validos), length(r_dtb3)))
+
 if (fecha_r0 != fecha_valoracion) cat(sprintf("  OJO: DTB3 no tiene dato el %s; r0 es el del %s\n", fecha_valoracion, fecha_r0))
 cat(sprintf("  r0 = DTB3 del %s = %.2f %% (descuento) = %s continua\n", fecha_r0, tail(dtb3_validos$tasa_pct, 1), pct(r0, 3)))
 chequeo("r0 (DTB3) vs y(0,3m) de la curva del Tesoro", sprintf("%s vs %s", pct(r0, 3), pct(y0(0.25), 3)),
         "|dif| < 10 pb", abs(r0 - y0(0.25)) < 0.001,
         nota = "Es una alarma, no una prueba: misma letra, dos publicaciones y convenciones. Si falla, revisar fecha y conversion.")
+
 ```
 
 **Regresión bajo P y barras de error.** Se estima r_{t+D} = α + β r_t con D = 1/252. Para las barras de error se usa un bootstrap paramétrico: se simulan N_BOOT historias con los parámetros estimados, del mismo largo y con el mismo punto de partida, y se repite la misma regresión en cada una.
@@ -647,11 +648,13 @@ chequeo("r0 (DTB3) vs y(0,3m) de la curva del Tesoro", sprintf("%s vs %s", pct(r
 est <- est_vasicek(r_dtb3)
 if (!est$ok) stop(sprintf("beta = %.6f fuera de (0,1): no hay reversion a la media estimable (a <= 0). ", est$beta),
                   "Eso ya es un diagnostico para la tarea (d).")
+
 aP <- est$a; bP <- est$b; sP <- est$s
 cat(sprintf("  %d observaciones ; beta = %.6f ; alpha = %.3e ; sd(e) = %.3e ; R^2 = %.5f\n",
             est$n, est$beta, est$alpha, est$sd_e, summary(est$fit)$r.squared))
 cat(sprintf("  a = %.4f (+- %.4f, delta) ; b^P = %.5f ; b^P/a = %s (+- %s) ; sigma = %.5f ; vida media ln2/a = %.2f anios\n",
             aP, 1.96 * est$ee_a, bP, pct(est$mu, 3), pct(1.96 * est$ee_mu, 2), sP, log(2) / aP))
+
 
 set.seed(SEMILLA + 1)
 eb <- est_columnas(sim_hist(N_BOOT, length(r_dtb3), r_dtb3[1], aP, bP, sP))
