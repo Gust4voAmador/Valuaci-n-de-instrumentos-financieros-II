@@ -2,8 +2,6 @@
 "p(0,5), curva f = 0.05 - 0.02 e^{-T}","0.794427","0.794427","PASA","si",""
 "tasa swap anual a 5 anios, caso base (Prop. 19.8)","4.6822 %","4.6822 %","PASA","si",""
 "Vasicek p(0,5), a=0.5 b=0.025 sigma=0.01 r0=3 %","0.808302","0.808302","PASA","si",""
-"el bootstrap recupera el caso base (sin interpolar)","2.2e-16","< 1e-10","PASA","si","No es circular: las p exactas no entran al bootstrap, solo las tasas par."
-"error de interpolacion en y(0,T<=10), caso base, solo plazos del Tesoro","lineal 2.93 pb ; spline 0.45 pb","informativo","INFO","si","Cota de cuanto mueve la interpolacion de las tasas par a una curva conocida."
 "curva_variante() reproduce curva_cero y curva_forward","max dif. = 0.0e+00 ; NA en curva_cero: 0","< 1e-12 y sin NA","PASA","si",""
 "sensibilidad a la interpolacion (lineal vs spline), T <= 10","y: 1.38 pb ; f: 6.3 pb ; p(0,T_opcion): 0.0e+00","informativo","INFO","si","Barra de error de la curva: p e y casi no cambian; f si."
 "sensibilidad del tramo corto (simple vs semestral del lab)","y en plazos < 6 m: hasta 3.63 pb ; p(0,T_opcion): 4.5e-05","informativo","INFO","si","La guia pide el metodo del lab (semestral); el de ustedes es descuento simple. Declarar cual y cuanto mueve."

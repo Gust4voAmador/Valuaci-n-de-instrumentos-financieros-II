@@ -1084,8 +1084,43 @@ knitr::kable(cuadro_tres_bitacoras, align = c("l", "c", "c", "c"),
 cuadro_tres_bitacoras
 ```
 
+# Parte d
 
+```{r}
+# ¿Qué bQ necesitaría Vasicek para calzar cada plazo por separado?
+plazos_d <- c(2, 5, 10)
 
+bQ_por_plazo <- vapply(plazos_d, function(t) {
+  calibrar_b(t, y0(t), r0, aP, sP)
+}, numeric(1))
+
+diagnostico_d <- data.frame(
+  plazo_anios = plazos_d,
+  bQ_exacto = bQ_por_plazo,
+  lambda_implicito = (bP - bQ_por_plazo) / sP,
+  error_con_bQ_unico_pb = 1e4 * (
+    y_vas(plazos_d, r0, aP, bQ, sP) - y0(plazos_d)
+  )
+)
+
+print(round(diagnostico_d, 4), row.names = FALSE)
+
+# Costo del ajuste con un solo parámetro en todos los nodos de (b).
+cat(sprintf("\nRMSE de la curva con un único bQ: %.2f pb\n",
+            sqrt(mean(comp_b$dif_Q_pb^2))))
+
+# Efecto sobre la call: cambiar únicamente el descuento, con rho = 0.
+i0 <- match(0, rho_c)
+precio_curva_d <- call_varianza(S0, K, T, p0(T), q_c, var_ntr[i0])
+precio_vas_d <- call_varianza(
+  S0, K, T, p_vas(T, r0, aP, bQ, sP), q_c, var_ntr[i0]
+)
+
+cat(sprintf(
+  "Call con descuento del Tesoro: USD %.5f\nCall con descuento de Vasicek: USD %.5f\nDiferencia por acción: USD %+.5f\n",
+  precio_curva_d, precio_vas_d, precio_vas_d - precio_curva_d
+))
+```
 
 
 
