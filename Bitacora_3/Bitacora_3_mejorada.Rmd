@@ -1084,7 +1084,7 @@ knitr::kable(cuadro_tres_bitacoras, align = c("l", "c", "c", "c"),
 cuadro_tres_bitacoras
 ```
 
-# Parte d
+# El supuesto que no se cumplió
 
 ```{r}
 # ¿Qué bQ necesitaría Vasicek para calzar cada plazo por separado?

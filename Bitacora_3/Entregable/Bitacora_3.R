@@ -1,0 +1,929 @@
+# Bitácora 3 | Valoración de instrumentos financieros
+# Gustavo Amador Fonseca C20451 y Henri Gerard Gabert Hidalgo B93096
+# Desde la carpeta que contiene este script y Datos/, ejecutar en RStudio:
+# source("Bitacora_3.R", encoding = "UTF-8")
+# Dependencia de lectura del Excel: install.packages("readxl") (una sola vez).
+
+pct <- function(x, d = 2) sprintf(paste0("%.", d, "f %%"), 100 * x)
+pb  <- function(x, d = 1) sprintf(paste0("%.", d, "f pb"), 1e4 * x)
+
+# --- Capa de verificacion: cada chequeo queda registrado ---
+CHEQUEOS <- data.frame()
+chequeo <- function(nombre, valor, referencia, pasa, podia_fallar = TRUE, nota = "") {
+  res <- if (is.na(pasa)) "INFO" else if (pasa) "PASA" else "FALLA"
+  CHEQUEOS <<- rbind(CHEQUEOS, data.frame(chequeo = nombre, valor = valor, referencia = referencia,
+                                          resultado = res,
+                                          podia_fallar = if (podia_fallar) "si" else "no (circular)",
+                                          nota = nota, stringsAsFactors = FALSE))
+  cat(sprintf("  [%-5s] %s: %s   (ref.: %s)%s\n", res, nombre, valor, referencia,
+              if (nchar(nota)) paste0("\n          ", nota) else ""))
+}
+
+# --- Cap. 19 ---
+tasa_swap   <- function(p_T0, p_Ti, delta) (p_T0 - p_Ti[length(p_Ti)]) / (delta * sum(p_Ti))  # Prop. 19.8
+precio_bono <- function(cpn, p_Ti, delta) cpn * delta * sum(p_Ti) + p_Ti[length(p_Ti)]       # (19.17)
+p_base <- function(t) exp(-(0.05 * t - 0.02 * (1 - exp(-t))))   
+# caso base 9/11: f = 0.05 - 0.02 e^{-T}
+
+
+B_vas <- function(tau, a) (1 - exp(-a * tau)) / a
+A_vas <- function(tau, a, b, s) { B <- B_vas(tau, a); (B - tau) * (a * b - s^2 / 2) / a^2 - s^2 * B^2 / (4 * a) }
+p_vas <- function(t, r, a, b, s) exp(A_vas(t, a, b, s) - B_vas(t, a) * r)
+y_vas <- function(t, r, a, b, s) -log(p_vas(t, r, a, b, s)) / t
+
+# La función recibe Sigma² para toda la vida de la opción.
+# El descuento P y el rendimiento por dividendos q entran por separado.
+call_varianza <- function(S, K, T, P, q, varianza) {
+  spot_ajustado <- S * exp(-q * T)
+  strike_descontado <- K * P
+
+  if (varianza == 0) {
+    return(max(spot_ajustado - strike_descontado, 0))
+  }
+
+  Sigma <- sqrt(varianza)
+  d1 <- log(spot_ajustado / strike_descontado) / Sigma + Sigma / 2
+  d2 <- d1 - Sigma
+
+  spot_ajustado * pnorm(d1) - strike_descontado * pnorm(d2)
+}
+
+varianza_vasicek <- function(T, a, sigma_r, sigma_S, rho) {
+  stopifnot(T > 0, a > 0, sigma_r >= 0, sigma_S >= 0, abs(rho) <= 1)
+
+  integrando <- function(t) {
+    B <- B_vas(T - t, a)
+    # Equivale al integrando de la guía y conserva la no negatividad.
+    (sigma_S + rho * sigma_r * B)^2 +
+      (1 - rho^2) * (sigma_r * B)^2
+  }
+
+  integrate(integrando, lower = 0, upper = T, rel.tol = 1e-10)$value
+}
+
+# Controles del curso ----
+cat("\nControles del curso\n")
+
+p5b <- p_base(5)
+chequeo("p(0,5), curva f = 0.05 - 0.02 e^{-T}", sprintf("%.6f", p5b), "0.794427", abs(p5b - 0.794427) < 5e-7)
+
+Rb <- tasa_swap(1, p_base(1:5), 1)
+chequeo("tasa swap anual a 5 anios, caso base (Prop. 19.8)", pct(Rb, 4), "4.6822 %", abs(100 * Rb - 4.6822) < 5e-5)
+
+pv5 <- p_vas(5, 0.03, 0.5, 0.025, 0.01)
+chequeo("Vasicek p(0,5), a=0.5 b=0.025 sigma=0.01 r0=3 %", sprintf("%.6f", pv5), "0.808302", abs(pv5 - 0.808302) < 5e-7)
+
+# Call europea del curso con q = 0
+
+rho_c <- c(-1, 0, 1)
+
+var_guia <- vapply(
+  rho_c,
+  function(rho) varianza_vasicek(
+    T = 1, a = 0.5, sigma_r = 0.01, sigma_S = 0.20, rho = rho
+  ),
+  numeric(1)
+)
+
+# En Black–Scholes la varianza integrada es sigma_S² * T.
+var_guia <- c(var_guia, 0.20^2 * 1)
+
+precios_guia <- vapply(
+  var_guia,
+  function(v) call_varianza(
+    S = 100, K = 100, T = 1, P = 0.963332, q = 0, varianza = v
+  ),
+  numeric(1)
+)
+
+controles_c <- data.frame(
+  caso = c("Vasicek, rho = -1", "Vasicek, rho = 0",
+           "Vasicek, rho = 1", "Black–Scholes"),
+  referencia = c(9.6259, 9.7907, 9.9521, 9.7885),
+  calculado = unname(precios_guia)
+)
+
+for (i in seq_len(nrow(controles_c))) {
+  chequeo(
+    nombre = paste("Call del curso", controles_c$caso[i]),
+    valor = sprintf("%.6f", controles_c$calculado[i]),
+    referencia = sprintf("%.4f", controles_c$referencia[i]),
+    pasa = abs(controles_c$calculado[i] - controles_c$referencia[i]) < 0.00005
+  )
+}
+
+print(controles_c)
+
+controles_curso <- CHEQUEOS
+print(controles_curso[c("chequeo", "valor", "referencia", "resultado")], row.names = FALSE)
+if (any(controles_curso$resultado != "PASA")) {
+  stop("Revisá los controles del curso antes de continuar con los datos de mercado.")
+}
+
+carpeta_datos <- "Datos"
+archivo_tesoro <- file.path(carpeta_datos, "daily-treasury-rates.csv")
+archivo_dtb3 <- file.path(carpeta_datos, "DTB3.xlsx")
+archivos <- c(archivo_tesoro, archivo_dtb3)
+if (any(!file.exists(archivos))) {
+  stop("Faltan estos archivos: ", paste(archivos[!file.exists(archivos)], collapse = ", "),
+       ". Directorio de trabajo: ", getwd(), call. = FALSE)
+}
+if (!requireNamespace("readxl", quietly = TRUE)) {
+  stop("Instalá el paquete con install.packages('readxl') y ejecutá el script de nuevo.")
+}
+
+# Preparación de datos ----
+cat("\nPreparación de datos\n")
+
+fecha_valoracion <- as.Date("2026-11-24")
+fecha_inicio    <- as.Date("2021-11-24")
+vencimiento     <- as.Date("2027-01-15")
+
+S0 <- 66.33
+K  <- 67.50
+
+dias <- as.numeric(vencimiento - fecha_valoracion)
+T    <- dias / 365
+
+# Curva par del Tesoro
+
+tesoro <- read.csv(
+  archivo_tesoro,
+  check.names = FALSE,
+  na.strings = c("", "N/A", "NA", ".")
+)
+
+tesoro$Date <- as.Date(tesoro$Date, format = "%m/%d/%Y")
+
+# Seleccionar la fecha de valoración.
+fila <- subset(tesoro, Date == fecha_valoracion)
+if (nrow(fila) != 1L) stop("Se esperaba una fila del Tesoro para ", fecha_valoracion)
+
+# Columnas correspondientes a plazos.
+columnas <- grep(
+  "^[0-9.]+\\s+(Mo|Month|Yr|Year)$",
+  names(tesoro),
+  ignore.case = TRUE
+)
+
+plazos <- names(tesoro)[columnas]
+
+# Convertir las etiquetas de plazo a años.
+plazo_anios <- as.numeric(sub("\\s+.*", "", plazos))
+
+plazo_anios <- plazo_anios / ifelse(
+  grepl("mo", plazos, ignore.case = TRUE),
+  12,
+  1
+)
+
+curva_par <- data.frame(
+  plazo = plazos,
+  plazo_anios = plazo_anios,
+  tasa_pct = as.numeric(unlist(fila[columnas]))
+)
+
+curva_par <- subset(curva_par, is.finite(tasa_pct))
+curva_par$tasa <- curva_par$tasa_pct / 100
+
+curva_par <- curva_par[order(curva_par$plazo_anios), ]
+rownames(curva_par) <- NULL
+
+print(curva_par)
+
+# Histórico diario de la tasa a tres meses
+
+datos_dtb3 <- readxl::read_excel(
+  archivo_dtb3,
+  sheet = "Daily",
+  na = c("", ".", "NA", "N/A")
+)
+
+dtb3 <- data.frame(
+  fecha = as.Date(datos_dtb3$observation_date),
+  tasa_pct = as.numeric(datos_dtb3$DTB3)
+)
+
+dtb3$tasa <- dtb3$tasa_pct / 100
+
+dtb3 <- subset(
+  dtb3,
+  fecha >= fecha_inicio & fecha <= fecha_valoracion
+)
+
+dtb3 <- dtb3[order(dtb3$fecha), ]
+rownames(dtb3) <- NULL
+
+dtb3_validos <- subset(dtb3, is.finite(tasa))
+if (nrow(dtb3_validos) < 4L) stop("DTB3 tiene menos de cuatro observaciones válidas en el período.")
+
+print(head(dtb3))
+print(tail(dtb3))
+
+# Calls
+
+calls <- read.table(
+  header = TRUE,
+  text = "
+strike bid ask last volumen interes_abierto IV_pct delta
+55.0 10.90 12.90 10.20 0 178 40.7416 0.9213
+57.5 9.10 10.40 7.99 0 234 40.6569 0.8629
+60.0 6.70 8.10 6.45 0 955 34.5330 0.8184
+62.5 5.20 6.00 4.40 0 86 34.6820 0.7145
+65.0 3.60 4.00 3.70 2 303 33.7911 0.5983
+67.5 2.40 3.00 2.90 1 256 32.9173 0.4723
+70.0 1.40 2.00 1.73 10 2102 31.9903 0.3476
+72.5 0.95 1.40 1.15 18 2471 33.3601 0.2548
+75.0 0.35 0.80 0.60 5 2185 31.0923 0.1531
+77.5 0.25 0.55 0.20 0 380 32.6433 0.1083
+80.0 0.10 0.50 0.22 32 3472 34.7572 0.0807
+"
+)
+
+calls$tipo <- "call"
+
+# Puts
+
+puts <- read.table(
+  header = TRUE,
+  text = "
+strike bid ask last volumen interes_abierto IV_pct delta
+55.0 0.05 0.60 0.65 0 950 36.2395 -0.0762
+57.5 0.40 0.70 0.55 0 114 34.2851 -0.1237
+60.0 0.80 1.15 0.95 1 4678 33.3020 -0.1999
+62.5 1.40 1.85 1.47 14 348 32.3901 -0.3004
+65.0 2.00 2.95 3.50 0 1402 30.7392 -0.4201
+67.5 3.50 4.40 4.65 0 88 32.3697 -0.5468
+70.0 4.60 5.70 5.48 1 283 27.6764 -0.6969
+72.5 6.50 7.60 8.75 0 158 26.8212 -0.8132
+75.0 8.60 10.30 10.95 0 1661 31.3340 -0.8528
+77.5 10.80 12.20 13.35 0 124 25.0769 -0.9559
+80.0 13.00 15.20 16.50 0 393 29.3793 -0.9583
+"
+)
+
+puts$tipo <- "put"
+
+# Preparación de la cadena
+
+opciones_enero <- rbind(calls, puts)
+
+opciones_enero$fecha       <- fecha_valoracion
+opciones_enero$vencimiento <- vencimiento
+opciones_enero$S0          <- S0
+opciones_enero$T           <- T
+opciones_enero$estilo      <- "americana"
+
+opciones_enero$mid <- (
+  opciones_enero$bid + opciones_enero$ask
+) / 2
+
+opciones_enero$sigma_implicita <- opciones_enero$IV_pct / 100
+print(opciones_enero)
+
+# Call y put seleccionadas
+
+call_enero <- subset(
+  opciones_enero,
+  tipo == "call" & strike == K
+)
+
+put_enero <- subset(
+  opciones_enero,
+  tipo == "put" & strike == K
+)
+
+# Valores individuales para usar directamente en cálculos.
+C_mercado <- call_enero$mid
+P_mercado <- put_enero$mid
+
+sigma_call <- call_enero$sigma_implicita
+sigma_put  <- put_enero$sigma_implicita
+
+print(data.frame(
+  S0 = S0,
+  K = K,
+  dias = dias,
+  T = T,
+  C_mercado = C_mercado,
+  P_mercado = P_mercado,
+  sigma_call = sigma_call,
+  sigma_put = sigma_put
+), row.names = FALSE)
+
+# Tasas par en la malla semestral
+
+# Vencimientos: 0.5, 1, 1.5, ..., 30 años.
+tiempos_sem <- seq(
+  from = 0.5,
+  to = max(curva_par$plazo_anios),
+  by = 0.5
+)
+
+# Completar las tasas par mediante interpolación lineal.
+tasas_sem <- approx(
+  x = curva_par$plazo_anios,
+  y = curva_par$tasa,
+  xout = tiempos_sem,
+  method = "linear"
+)$y
+
+# Bootstrap de factores de descuento
+
+descuentos_sem <- numeric(length(tiempos_sem))
+
+for (n in seq_along(tiempos_sem)) {
+
+  cupon <- tasas_sem[n] / 2
+
+  # Para n = 1, esta suma es cero.
+  suma_descuentos <- sum(
+    descuentos_sem[seq_len(n - 1)]
+  )
+
+  descuentos_sem[n] <- (
+    1 - cupon * suma_descuentos
+  ) / (1 + cupon)
+}
+
+curva_sem <- data.frame(
+  plazo_anios = tiempos_sem,
+  tasa_par = tasas_sem,
+  descuento = descuentos_sem
+)
+print(descuentos_sem)
+
+# Incorporación de los plazos menores de seis meses
+
+cortos <- subset(curva_par, plazo_anios < 0.5)
+
+curva_corta <- data.frame(
+  plazo_anios = cortos$plazo_anios,
+  tasa_par = cortos$tasa,
+  descuento = 1 / (1 + cortos$tasa * cortos$plazo_anios)
+)
+
+curva_cero <- rbind(curva_corta, curva_sem)
+
+curva_cero <- curva_cero[
+  order(curva_cero$plazo_anios),
+]
+
+rownames(curva_cero) <- NULL
+
+# Tasas cero con capitalización continua.
+curva_cero$tasa_cero <- (
+  -log(curva_cero$descuento) / curva_cero$plazo_anios
+)
+
+curva_cero$tasa_cero_pct <- 100 * curva_cero$tasa_cero
+
+print(head(curva_cero, 10))
+
+# Funciones para consultar cualquier plazo
+
+# Incluir el origen: p(0,0) = 1 y log(p(0,0)) = 0.
+log_p0 <- approxfun(
+  x = c(0, curva_cero$plazo_anios),
+  y = c(0, log(curva_cero$descuento)),
+  method = "linear",
+  rule = 1
+)
+
+# Factor de descuento p(0,t).
+p0 <- function(t) {
+  exp(log_p0(t))
+}
+
+# Tasa cero continua y(0,t), en decimal.
+y0 <- function(t) {
+  ifelse(t > 0, -log_p0(t) / t, NA_real_)
+}
+
+# Descuento al vencimiento de las opciones
+
+# T ya fue definido como días al vencimiento / 365.
+P_T <- p0(T)
+r_T <- y0(T)
+
+print(data.frame(
+  vencimiento = vencimiento,
+  plazo_anios = T,
+  descuento = P_T,
+  tasa_cero = r_T,
+  tasa_cero_pct = 100 * r_T
+), row.names = FALSE)
+
+# Tasas forward por intervalo
+
+tiempos <- c(0, curva_cero$plazo_anios)
+log_descuentos <- c(0, log(curva_cero$descuento))
+
+curva_forward <- data.frame(
+  desde = head(tiempos, -1),
+  hasta = tail(tiempos, -1),
+  forward_continua = -diff(log_descuentos) / diff(tiempos)
+)
+
+curva_forward$forward_pct <- (
+  100 * curva_forward$forward_continua
+)
+
+print(head(curva_forward, 10))
+
+# Configuración y herramientas
+
+# Insumos compartidos que se verifican al terminar (a) y (b).
+.previos_b3 <- c("T", "K", "S0", "P_T", "r_T", "p0", "y0", "curva_cero",
+                 "curva_par", "curva_forward", "dtb3_validos", "call_enero", "put_enero")
+.copia_b3   <- mget(.previos_b3, envir = environment())
+
+TMAX_A          <- 10          # la tarea (a) llega a 10 anios
+CONVERSION_DTB3 <- "continua"  # DTB3 viene en base descuento: "continua" o "ninguna"
+DIAS_LETRA      <- 91          # plazo de la letra de DTB3, en dias
+D_REG           <- 1 / 252     # paso de la regresion: un dia habil
+N_BOOT          <- 500         # historias para las barras de error de (b)
+N_MC            <- 20000       # trayectorias del chequeo Monte Carlo de la Prop. 21.4
+SEMILLA         <- 20261126
+DIR_FIG <- "figuras"; DIR_SAL <- "salidas"
+for (carpeta_b3 in c(DIR_FIG, DIR_SAL)) dir.create(carpeta_b3, showWarnings = FALSE)
+options(width = 120)
+set.seed(SEMILLA)
+
+curva_variante <- function(cp, interp = c("lineal", "spline"), corto = c("simple", "semestral")) {
+  interp <- match.arg(interp); corto <- match.arg(corto)
+  cp <- cp[!is.na(cp$tasa), ]; cp <- cp[order(cp$plazo_anios), ]
+  Tg <- seq(0.5, max(cp$plazo_anios), by = 0.5)
+  largo <- cp$plazo_anios >= 0.5
+  cg <- if (interp == "lineal") approx(cp$plazo_anios, cp$tasa, xout = Tg)$y else
+    splinefun(cp$plazo_anios[largo], cp$tasa[largo], method = "monoH.FC")(Tg)
+  p <- numeric(length(Tg))
+  for (j in seq_along(Tg)) p[j] <- (1 - cg[j] / 2 * sum(p[seq_len(j - 1)])) / (1 + cg[j] / 2)
+  ct <- cp[!largo, ]
+  pc <- if (corto == "simple") 1 / (1 + ct$tasa * ct$plazo_anios) else (1 + ct$tasa / 2)^(-2 * ct$plazo_anios)
+  TT <- c(ct$plazo_anios, Tg); pp <- c(pc, p)
+  list(T = TT, p = pp, y = -log(pp) / TT, f = -diff(log(c(1, pp))) / diff(c(0, TT)), par = c(ct$tasa, cg),
+       en_malla = c(rep(FALSE, nrow(ct)), rep(TRUE, length(Tg))))
+}
+p_var <- function(cv, t) exp(approx(c(0, cv$T), c(0, log(cv$p)), xout = t)$y)
+
+# --- Caps. 20-21: Vasicek, Prop. 21.4 ---
+# Regresion AR(1) exacta (lab 19/11): beta = e^{-aD}, alpha = (b/a)(1 - beta), sd(e) = sigma sqrt((1-beta^2)/(2a))
+est_vasicek <- function(x_r, D = D_REG) {
+  x <- x_r[-length(x_r)]; y <- x_r[-1]
+  fit <- lm(y ~ x); cf <- unname(coef(fit)); V <- unname(vcov(fit))
+  al <- cf[1]; be <- cf[2]; se <- summary(fit)$sigma
+  if (!(be > 0 && be < 1)) return(list(ok = FALSE, beta = be, alpha = al))
+  a <- -log(be) / D; mu <- al / (1 - be); s <- se * sqrt(2 * a / (1 - be^2))
+  ee_a <- sqrt(V[2, 2]) / (be * D)
+  g <- c(1 / (1 - be), al / (1 - be)^2); ee_mu <- sqrt(drop(t(g) %*% V %*% g))
+  list(ok = TRUE, a = a, b = a * mu, mu = mu, s = s, alpha = al, beta = be, sd_e = se,
+       ee_a = ee_a, ee_mu = ee_mu, n = length(x), fit = fit)
+}
+sim_hist <- function(nrep, n_obs, r1, a, b, s, D = D_REG) {
+  be <- exp(-a * D); mu <- b / a; sd1 <- s * sqrt((1 - be^2) / (2 * a))
+  R <- matrix(0, n_obs, nrep); R[1, ] <- r1
+  for (j in 2:n_obs) R[j, ] <- mu + be * (R[j - 1, ] - mu) + sd1 * rnorm(nrep)
+  R
+}
+est_columnas <- function(R, D = D_REG) {
+  X <- R[-nrow(R), , drop = FALSE]; Y <- R[-1, , drop = FALSE]; nf <- nrow(X)
+  mx <- colMeans(X); my <- colMeans(Y)
+  Xc <- X - rep(mx, each = nf); Yc <- Y - rep(my, each = nf)
+  be <- colSums(Xc * Yc) / colSums(Xc^2); al <- my - be * mx
+  e <- Y - rep(al, each = nf) - X * rep(be, each = nf)
+  se <- sqrt(colSums(e^2) / (nf - 2))
+  a <- ifelse(be > 0 & be < 1, -log(be) / D, NA)
+  mu <- al / (1 - be); s <- se * sqrt(2 * a / (1 - be^2))
+  cbind(a = a, mu = mu, b = a * mu, s = s)
+}
+# Ajustar SOLO b: y(0,t) es lineal en b,  y = y(b = 0) + b (t - B)/(a t)  => solucion cerrada
+calibrar_b <- function(Tc, ym, r0, a, s) {
+  c1 <- (Tc - B_vas(Tc, a)) / (a * Tc); y00 <- y_vas(Tc, r0, a, 0, s)
+  sum(c1 * (ym - y00)) / sum(c1^2)
+}
+cuantil <- function(v, pr = c(.05, .5, .95)) quantile(v, pr, na.rm = TRUE, names = FALSE)
+
+# (a) Curva del Tesoro ----
+cat("\n(a) Curva del Tesoro\n")
+
+cv <- list(T = curva_cero$plazo_anios, p = curva_cero$descuento, y = curva_cero$tasa_cero,
+           f = curva_forward$forward_continua, par = curva_cero$tasa_par,
+           en_malla = curva_cero$plazo_anios >= 0.5)
+nodos <- sort(curva_par$plazo_anios[!is.na(curva_par$tasa)])
+k10 <- cv$T <= TMAX_A + 1e-9
+
+rep_cv <- curva_variante(curva_par)
+err_rep <- max(abs(rep_cv$p - cv$p), abs(rep_cv$f - cv$f), na.rm = TRUE)
+chequeo("curva_variante() reproduce curva_cero y curva_forward",
+        sprintf("max dif. = %.1e ; NA en curva_cero: %d", err_rep, sum(is.na(cv$p))), "< 1e-12 y sin NA",
+        err_rep < 1e-12 && !anyNA(cv$p) && all(abs(curva_forward$hasta - cv$T) < 1e-12))
+
+cat(sprintf("\n  Curva del %s ; %d plazos publicados ; p(0,T) al vencimiento de la opcion (%s, T = %.4f): %.6f\n",
+            fecha_valoracion, length(nodos), vencimiento, T, p0(T)))
+tabla_a <- data.frame(T = cv$T, par = 100 * cv$par, p = cv$p, y = 100 * cv$y, f = 100 * cv$f)[k10, ]
+print(round(tabla_a[!cv$en_malla[k10] | tabla_a$T %in% c(0.5, 1:10), ], 6), row.names = FALSE)
+write.csv(tabla_a, file.path(DIR_SAL, "curva_hoy.csv"), row.names = FALSE)
+
+# Tarea (a): la curva de hoy (cap. 19)
+
+cv_spl <- curva_variante(curva_par, interp = "spline")
+cv_sem <- curva_variante(curva_par, corto = "semestral")
+dif <- function(otra, campo) max(abs(otra[[campo]][k10] - cv[[campo]][k10]))
+chequeo("sensibilidad a la interpolacion (lineal vs spline), T <= 10",
+        sprintf("y: %s ; f: %s ; p(0,T_opcion): %.1e", pb(dif(cv_spl, "y"), 2), pb(dif(cv_spl, "f"), 1),
+                abs(p_var(cv_spl, T) - p0(T))), "informativo", NA,
+        nota = "Barra de error de la curva: p e y casi no cambian; f si.")
+en_tramo_corto <- !cv$en_malla
+chequeo("sensibilidad del tramo corto (simple vs semestral del lab)",
+        sprintf("y en plazos < 6 m: hasta %s ; p(0,T_opcion): %.1e", pb(max(abs(cv_sem$y[en_tramo_corto] - cv$y[en_tramo_corto])), 2),
+                abs(p_var(cv_sem, T) - p0(T))), "informativo", NA,
+        nota = "La guia pide el metodo del lab (semestral); el de ustedes es descuento simple. Declarar cual y cuanto mueve.")
+
+
+nodos10 <- nodos[nodos <= TMAX_A]
+yn <- y0(nodos10); dy <- diff(yn); tol <- 1e-5; menor <- 5e-4      # tol = 0.1 pb ; menor = 5 pb
+sgn <- sign(ifelse(abs(dy) < tol, 0, dy)); sgn <- sgn[sgn != 0]
+cambios <- if (length(sgn) > 1) sum(diff(sgn) != 0) else 0
+if (all(dy > -menor) && any(dy < -tol)) {
+  forma <- sprintf("creciente, salvo bajas menores a 5 pb (%s)",
+                   paste(sprintf("%.3g-%.3g a: %s", nodos10[dy < -tol], nodos10[which(dy < -tol) + 1], pb(dy[dy < -tol])),
+                         collapse = "; "))
+} else forma <- if (all(sgn >= 0)) "creciente" else if (all(sgn <= 0)) "invertida (decreciente)" else
+  if (cambios == 1 && sgn[1] > 0) "con joroba (sube y luego baja)" else
+  if (cambios == 1 && sgn[1] < 0) "con valle (baja y luego sube)" else sprintf("ondulada (%d cambios de pendiente)", cambios)
+cat(sprintf("  y(0,T) hasta %g anios: %s\n  minimo %s (T = %.3g) ; maximo %s (T = %.3g) ; 10a - 3m = %s\n",
+            TMAX_A, forma, pct(min(yn), 3), nodos10[which.min(yn)], pct(max(yn), 3), nodos10[which.max(yn)],
+            pb(y0(10) - y0(0.25))))
+
+
+jm <- which(cv$en_malla); im <- which(cv$en_malla & k10)
+rep_par <- sapply(seq_along(jm), function(j) precio_bono(cv$par[jm[j]], cv$p[jm[1:j]], 0.5))
+chequeo("bonos par de la malla vuelven a valer 1", sprintf("max |P - 1| = %.1e", max(abs(rep_par - 1))),
+        "< 1e-12", max(abs(rep_par - 1)) < 1e-12, podia_fallar = FALSE,
+        nota = "Es la ecuacion del bootstrap: solo detecta errores de programacion.")
+chequeo("0 < p(0,T) < 1 y decreciente (f > 0)", sprintf("min f = %s", pct(min(cv$f[k10]), 3)), "f > 0",
+        all(diff(c(1, cv$p[k10])) < 0) && all(cv$p[k10] > 0 & cv$p[k10] < 1))
+
+# Ej. 19.5 (b): si y es creciente,  y_M(0,T) <= y(0,T) <= f(0,T)
+#   y_M = TIR continua del bono par de plazo T con cupon semestral c:  y_M = 2 ln(1 + c/2)
+#   f(0,T): forward del tramo que termina en T (curva_forward)
+yM <- 2 * log(1 + cv$par[im] / 2)
+ok1 <- yM <= cv$y[im] + 1e-12; ok2 <- cv$y[im] <= cv$f[im] + 1e-12
+ej195 <- data.frame(T = cv$T[im], yM = round(100 * yM, 3), y = round(100 * cv$y[im], 3),
+                    f = round(100 * cv$f[im], 3), yM_menor_y = ok1, y_menor_f = ok2)
+print(ej195[ej195$T %in% c(0.5, 1, 2, 3, 5, 7, 10), ], row.names = FALSE)
+creciente <- all(diff(cv$y[k10]) >= -1e-12)
+chequeo("Ej. 19.5: y_M <= y <= f en toda la malla T <= 10",
+        sprintf("y_M<=y falla en %d de %d plazos ; y<=f falla en %d", sum(!ok1), length(im), sum(!ok2)),
+        if (creciente) "y es creciente: deberian cumplirse todas" else "y NO es creciente: no tienen por que cumplirse",
+        if (creciente) all(ok1 & ok2) else NA,
+        nota = if (creciente) "" else sprintf("y baja en algun tramo (ver forma); en la malla T >= 0.5 %s.",
+                                              if (all(ok1 & ok2)) "igual se cumplen todas" else "hay plazos que no las cumplen"))
+
+# Prop. 19.8: tasa swap semestral a 5 anios contra la tasa par a 5 anios
+p_malla <- curva_sem$descuento[curva_sem$plazo_anios <= 5 + 1e-9]
+R5 <- tasa_swap(1, p_malla, 0.5)
+par5 <- curva_par$tasa[abs(curva_par$plazo_anios - 5) < 1e-9]
+chequeo("tasa swap semestral a 5 anios (Prop. 19.8) = tasa par a 5 anios",
+        sprintf("%s vs %s", pct(R5, 4), pct(par5, 4)), "diferencia < 0.01 pb", abs(R5 - par5) < 1e-6,
+        podia_fallar = FALSE,
+        nota = "Coinciden por construccion: la par de 5 anios entro al bootstrap (Ej. 19.3). Verifica formulas e indices, no la curva.")
+
+
+graficar_a <- function() {
+  op <- par(mfrow = c(1, 2), mar = c(4.3, 4.3, 3, 4.3)); on.exit(par(op))
+  Tk <- cv$T[k10]; fk <- cv$f[k10]
+  yl <- range(100 * c(cv$y[k10], fk, cv$par[k10], cv_spl$f[k10])) + c(-0.15, 0.15)
+  yl1 <- yl - c(diff(yl) * 0.45, 0)
+  plot(Tk, 100 * cv$y[k10], type = "l", lwd = 2.2, col = "steelblue", ylim = yl1, xlim = c(0, TMAX_A),
+       xlab = "T (anios)", ylab = "tasa continua (%)", main = sprintf("Curva del Tesoro, %s", fecha_valoracion))
+  lines(c(0, Tk), 100 * c(fk, fk[length(fk)]), type = "s", lwd = 2.2, col = "firebrick")
+  points(nodos10, 100 * curva_par$tasa[match(nodos10, curva_par$plazo_anios)], pch = 19, cex = .7, col = "grey30")
+  abline(v = T, lty = 3, col = "darkorange")
+  par(new = TRUE)
+  plot(c(0, Tk), c(1, cv$p[k10]), type = "l", lwd = 2.2, lty = 2, col = "darkgreen", axes = FALSE, xlab = "", ylab = "",
+       xlim = c(0, TMAX_A), ylim = c(min(cv$p[k10]) - 0.6 * (1 - min(cv$p[k10])), 1))
+  axis(4, col.axis = "darkgreen"); mtext("p(0,T)", side = 4, line = 2.8, col = "darkgreen")
+  legend("bottomright", c("y(0,T) cupon cero", "f(0,T) forward (por tramo)", "tasas par publicadas",
+                          "p(0,T) (eje derecho)", "vencimiento de la opcion"),
+         col = c("steelblue", "firebrick", "grey30", "darkgreen", "darkorange"), lwd = c(2, 2, NA, 2, 1),
+         lty = c(1, 1, NA, 2, 3), pch = c(NA, NA, 19, NA, NA), bty = "n", cex = .8)
+  par(mar = c(4.3, 4.3, 3, 1))
+  plot(c(0, Tk), 100 * c(fk, fk[length(fk)]), type = "s", lwd = 2, col = "firebrick", ylim = yl,
+       xlab = "T (anios)", ylab = "%", main = "f(0,T): sensibilidad a la interpolacion")
+  fs <- cv_spl$f[k10]
+  lines(c(0, Tk), 100 * c(fs, fs[length(fs)]), type = "s", lwd = 2, lty = 2, col = "darkorange")
+  lines(Tk, 100 * cv$y[k10], col = "steelblue", lwd = 1.5)
+  abline(v = nodos10[nodos10 >= 0.5], col = "grey85", lty = 3)
+  legend("bottomright", c("f, lineal (la usada)", "f, spline", "y(0,T)"),
+         col = c("firebrick", "darkorange", "steelblue"), lwd = 2, lty = c(1, 2, 1), bty = "n", cex = .85)
+}
+if (interactive()) graficar_a()
+png(file.path(DIR_FIG, "a_curva_hoy.png"), width = 1700, height = 750, res = 150); graficar_a(); invisible(dev.off())
+
+# (b) Vasicek bajo P y bajo Q ----
+cat("\n(b) Vasicek bajo P y bajo Q\n")
+
+r_dtb3 <- if (CONVERSION_DTB3 == "continua") -log(1 - dtb3_validos$tasa * DIAS_LETRA / 360) / (DIAS_LETRA / 365) else
+  dtb3_validos$tasa
+
+fechas_dtb3 <- dtb3_validos$fecha
+r0 <- tail(r_dtb3, 1); fecha_r0 <- tail(fechas_dtb3, 1)
+
+cat(sprintf("  DTB3 %s a %s: %d filas, %d sin dato descartadas, quedan %d\n",
+            fecha_inicio, fecha_valoracion, nrow(dtb3), nrow(dtb3) - nrow(dtb3_validos), length(r_dtb3)))
+
+if (fecha_r0 != fecha_valoracion) cat(sprintf("  OJO: DTB3 no tiene dato el %s; r0 es el del %s\n", fecha_valoracion, fecha_r0))
+cat(sprintf("  r0 = DTB3 del %s = %.2f %% (descuento) = %s continua\n", fecha_r0, tail(dtb3_validos$tasa_pct, 1), pct(r0, 3)))
+chequeo("r0 (DTB3) vs y(0,3m) de la curva del Tesoro", sprintf("%s vs %s", pct(r0, 3), pct(y0(0.25), 3)),
+        "|dif| < 10 pb", abs(r0 - y0(0.25)) < 0.001,
+        nota = "Es una alarma, no una prueba: misma letra, dos publicaciones y convenciones. Si falla, revisar fecha y conversion.")
+
+# Tarea (b): Vasicek bajo P y bajo Q (caps. 20–21)
+
+est <- est_vasicek(r_dtb3)
+if (!est$ok) stop(sprintf("beta = %.6f fuera de (0,1): no hay reversion a la media estimable (a <= 0). ", est$beta),
+                  "Eso ya es un diagnostico para la tarea (d).")
+
+aP <- est$a; bP <- est$b; sP <- est$s
+cat(sprintf("  %d observaciones ; beta = %.6f ; alpha = %.3e ; sd(e) = %.3e ; R^2 = %.5f\n",
+            est$n, est$beta, est$alpha, est$sd_e, summary(est$fit)$r.squared))
+cat(sprintf("  a = %.4f (+- %.4f, delta) ; b^P = %.5f ; b^P/a = %s (+- %s) ; sigma = %.5f ; vida media ln2/a = %.2f anios\n",
+            aP, 1.96 * est$ee_a, bP, pct(est$mu, 3), pct(1.96 * est$ee_mu, 2), sP, log(2) / aP))
+
+
+set.seed(SEMILLA + 1)
+eb <- est_columnas(sim_hist(N_BOOT, length(r_dtb3), r_dtb3[1], aP, bP, sP))
+validas <- !is.na(eb[, "a"]) & is.finite(eb[, "b"])
+qa <- cuantil(eb[validas, "a"]); qm <- cuantil(eb[validas, "mu"]); qs <- cuantil(eb[validas, "s"])
+print(data.frame(parametro = c("a", "b^P/a (%)", "sigma"),
+                 p5 = c(qa[1], 100 * qm[1], qs[1]), mediana = c(qa[2], 100 * qm[2], qs[2]),
+                 p95 = c(qa[3], 100 * qm[3], qs[3]), estimado = c(aP, 100 * est$mu, sP)), digits = 4, row.names = FALSE)
+chequeo("la regresion recupera sigma en historias simuladas (sesgo de la mediana)",
+        sprintf("%.2f %%", 100 * (qs[2] / sP - 1)), "|sesgo| < 2 %", abs(qs[2] / sP - 1) < 0.02)
+chequeo("sesgo de a en historias simuladas (mediana / verdad)", sprintf("%.2f veces", qa[2] / aP), "informativo", NA,
+        nota = "Con 5 anios la regresion sobreestima a (lab del 19/11).")
+
+
+TCAL <- nodos10                                    # plazos publicados hasta 10 anios (datos, no interpolados)
+ym <- y0(TCAL)
+yP <- y_vas(TCAL, r0, aP, bP, sP)
+Tg <- seq(0.05, TMAX_A, by = 0.05)
+banda  <- apply(sapply(which(validas), function(i) y_vas(Tg,   r0, eb[i, "a"], eb[i, "b"], eb[i, "s"])), 1, cuantil, pr = c(.05, .95))
+bandaN <- apply(sapply(which(validas), function(i) y_vas(TCAL, r0, eb[i, "a"], eb[i, "b"], eb[i, "s"])), 1, cuantil, pr = c(.05, .95))
+dentro <- ym >= bandaN[1, ] & ym <= bandaN[2, ]
+
+bQ <- calibrar_b(TCAL, ym, r0, aP, sP)              # solo b; a y sigma fijas en las de P
+yQ <- y_vas(TCAL, r0, aP, bQ, sP)
+bQ_opt <- optimize(function(b_) sum((y_vas(TCAL, r0, aP, b_, sP) - ym)^2), c(-1, 1), tol = 1e-12)$minimum
+rmse <- function(e) 1e4 * sqrt(mean(e^2))
+
+comp_b <- data.frame(T = TCAL, mercado = 100 * ym, vasicek_bP = 100 * yP,
+                     banda90_inf = 100 * bandaN[1, ], banda90_sup = 100 * bandaN[2, ],
+                     dif_P_pb = 1e4 * (yP - ym), vasicek_bQ = 100 * yQ, dif_Q_pb = 1e4 * (yQ - ym))
+print(round(comp_b, 3), row.names = FALSE)
+cat(sprintf("  b^P = %.5f (regresion) ; b^Q = %.5f (ajuste a la curva)\n", bP, bQ))
+cat(sprintf("  error RMS contra el mercado: antes del ajuste (b^P) %.1f pb ; despues (b^Q) %.1f pb\n",
+            rmse(yP - ym), rmse(yQ - ym)))
+cat(sprintf("  nivel largo: b^P/a = %s ; b^Q/a = %s ; y(0,inf) bajo Q = %s\n",
+            pct(bP / aP, 3), pct(bQ / aP, 3), pct(bQ / aP - sP^2 / (2 * aP^2), 3)))
+chequeo("ajuste de b: solucion cerrada = optimize()", sprintf("%.3e", abs(bQ - bQ_opt)), "< 1e-8", abs(bQ - bQ_opt) < 1e-8)
+chequeo("la curva de P (con su banda 90 %) contiene a la de mercado",
+        sprintf("%d de %d plazos dentro", sum(dentro), length(TCAL)), "todos dentro = no se distingue P de Q", all(dentro),
+        nota = "Si FALLA, la diferencia P vs Q es mayor que el ruido de estimar con 5 anios.")
+chequeo("residuo despues de ajustar solo b (error RMS)", sprintf("%.1f pb", rmse(yQ - ym)), "informativo", NA,
+        nota = "Con a y sigma fijas, un solo parametro no fuerza la coincidencia de toda la curva.")
+
+
+lam <- (bP - bQ) / sP
+lam_b <- sapply(which(validas), function(i)
+  (eb[i, "b"] - calibrar_b(TCAL, ym, r0, eb[i, "a"], eb[i, "s"])) / eb[i, "s"])
+ql <- cuantil(lam_b)
+prima <- function(t) -lam * sP * B_vas(t, aP)       # alpha_T - r = lambda sigma_T, con sigma_T = -sigma B
+cat(sprintf("  lambda = (%.5f - %.5f)/%.5f = %.3f ; banda 90 %% (bootstrap) [%.3f, %.3f]\n", bP, bQ, sP, lam, ql[1], ql[3]))
+cat(sprintf("  prima del bono T, -lambda sigma B(0,T): T=1 %s ; T=2 %s ; T=5 %s ; T=10 %s ; T->inf %s\n",
+            pb(prima(1), 0), pb(prima(2), 0), pb(prima(5), 0), pb(prima(10), 0), pb(-lam * sP / aP, 0)))
+chequeo("signo de lambda distinguible de cero (banda 90 %)", sprintf("[%.3f, %.3f]", ql[1], ql[3]), "no contiene 0",
+        ql[1] > 0 || ql[3] < 0)
+
+
+set.seed(SEMILLA + 2)
+dt_mc <- 1 / 252; pasos_mc <- round(5 / dt_mc); ea <- exp(-aP * dt_mc)
+sd1 <- sP * sqrt((1 - exp(-2 * aP * dt_mc)) / (2 * aP))
+rr <- rep(r0, N_MC); integ <- rep(0, N_MC)
+for (paso in 1:pasos_mc) { rn <- rr * ea + (bQ / aP) * (1 - ea) + sd1 * rnorm(N_MC); integ <- integ + dt_mc * (rr + rn) / 2; rr <- rn }
+dsc <- exp(-integ); mc5 <- mean(dsc); ee5 <- sd(dsc) / sqrt(N_MC); pf5 <- p_vas(5, r0, aP, bQ, sP)
+chequeo("Prop. 21.4 vs Monte Carlo, p(0,5) bajo Q", sprintf("formula %.6f ; MC %.6f +- %.6f", pf5, mc5, 1.96 * ee5),
+        "formula dentro del IC 95 %", abs(mc5 - pf5) < 1.96 * ee5)
+cat(sprintf("  p(0,T_opcion = %.4f): curva %.6f ; Vasicek b^Q %.6f ; Vasicek b^P %.6f\n",
+            T, p0(T), p_vas(T, r0, aP, bQ, sP), p_vas(T, r0, aP, bP, sP)))
+
+
+graficar_b <- function() {
+  op <- par(mfrow = c(2, 2), mar = c(4.3, 4.3, 3, 1)); on.exit(par(op))
+  plot(fechas_dtb3, 100 * r_dtb3, type = "l", xlab = "", ylab = "r (%)", ylim = range(100 * c(r_dtb3, bP / aP, bQ / aP)),
+       main = sprintf("DTB3 (%s), %s a %s", CONVERSION_DTB3, fecha_inicio, fecha_valoracion))
+  abline(h = 100 * bP / aP, col = "firebrick", lty = 2); abline(h = 100 * bQ / aP, col = "steelblue", lty = 2)
+  legend("bottomright", c("b^P/a (regresion)", "b^Q/a (ajuste a la curva)"), col = c("firebrick", "steelblue"),
+         lty = 2, bty = "n", cex = .85)
+  yl <- range(100 * c(banda, ym, yQ, yP)) + c(-0.1, 0.1)
+  plot(Tg, 100 * y_vas(Tg, r0, aP, bP, sP), type = "n", ylim = yl, xlab = "T (anios)", ylab = "y(0,T) (%)",
+       main = "Curva de mercado vs. Vasicek bajo P y bajo Q")
+  polygon(c(Tg, rev(Tg)), 100 * c(banda[1, ], rev(banda[2, ])), col = adjustcolor("firebrick", .15), border = NA)
+  lines(Tg, 100 * y_vas(Tg, r0, aP, bP, sP), col = "firebrick", lwd = 2, lty = 2)
+  lines(Tg, 100 * y_vas(Tg, r0, aP, bQ, sP), col = "steelblue", lwd = 2)
+  lines(cv$T[k10], 100 * cv$y[k10], col = "grey30", lwd = 1.5); points(TCAL, 100 * ym, pch = 19, cex = .8)
+  legend("bottomright", c("mercado, tarea (a)", "Vasicek con b^P (banda 90 %)", "Vasicek con b^Q (solo b)"),
+         col = c("grey30", "firebrick", "steelblue"), lwd = 2, lty = c(1, 2, 1), pch = c(19, NA, NA), bty = "n", cex = .85)
+  hist(eb[validas, "a"], breaks = 40, col = "grey80", border = "white", xlab = "a estimada",
+       main = sprintf("a en %d historias simuladas", sum(validas))); abline(v = aP, col = "firebrick", lwd = 2)
+  lb <- lam_b[lam_b > quantile(lam_b, .01) & lam_b < quantile(lam_b, .99)]
+  hist(lb, breaks = 40, col = "grey80", border = "white", xlab = "lambda implicito",
+       main = "lambda en las mismas historias (sin el 1 % de cada cola)")
+  abline(v = lam, col = "firebrick", lwd = 2); abline(v = 0, lty = 3)
+}
+if (interactive()) graficar_b()
+png(file.path(DIR_FIG, "b_vasicek.png"), width = 1700, height = 1300, res = 150); graficar_b(); invisible(dev.off())
+
+# Verificación de (a) y (b) ----
+cat("\nVerificación de (a) y (b)\n")
+
+cambiados <- .previos_b3[!mapply(identical, .copia_b3,
+                                 mget(.previos_b3, envir = environment(), ifnotfound = list(NULL)))]
+chequeo("objetos de la preparacion de datos intactos despues de (a) y (b)",
+        if (length(cambiados)) paste("cambiados:", paste(cambiados, collapse = ", ")) else "ninguno cambio",
+        "ninguno cambio", !length(cambiados),
+        nota = "Protege lo que usa la tarea (c): T, K, S0, P_T, curva_cero, p0, etc.")
+
+cat("  resultado  podia fallar    chequeo -> valor\n")
+for (i in seq_len(nrow(CHEQUEOS)))
+  cat(sprintf("  %-9s  %-14s  %s -> %s\n", CHEQUEOS$resultado[i], CHEQUEOS$podia_fallar[i],
+              CHEQUEOS$chequeo[i], CHEQUEOS$valor[i]))
+write.csv(CHEQUEOS, file.path(DIR_SAL, "chequeos_ab.csv"), row.names = FALSE)
+write.csv(controles_curso, file.path(DIR_SAL, "controles_curso.csv"), row.names = FALSE)
+
+resultados_ab <- list(
+  fecha_valoracion = fecha_valoracion, forma = forma, swap5 = R5, par5 = par5,
+  T_opcion = T, p_opcion = p0(T), r0 = r0, fecha_r0 = fecha_r0, n_obs = est$n,
+  P = c(a = aP, b = bP, sigma = sP, mu = est$mu), ee = c(a = est$ee_a, mu = est$ee_mu),
+  Q = c(a = aP, b = bQ, sigma = sP), lambda = lam, lambda_banda90 = ql[c(1, 3)],
+  rmse_pb = c(P = rmse(yP - ym), Q = rmse(yQ - ym)), tcal = TCAL, y_mercado = ym, y_P = yP, y_Q = yQ,
+  boot = eb[validas, ])
+saveRDS(resultados_ab, file.path(DIR_SAL, "resultados_ab.rds"))
+cat(sprintf("\n  Curva %s: %s ; swap 5a %s = par %s ; p(0,T_opcion) = %.6f\n",
+            fecha_valoracion, forma, pct(R5, 3), pct(par5, 3), p0(T)))
+cat(sprintf("  Vasicek P: a = %.3f, b^P/a = %s, sigma = %.4f ; Q (solo b): b^Q/a = %s ; lambda = %.3f [%.3f, %.3f]\n",
+            aP, pct(bP / aP), sP, pct(bQ / aP), lam, ql[1], ql[3]))
+cat(sprintf("  %d chequeos: %d PASA, %d FALLA, %d informativos\n", nrow(CHEQUEOS), sum(CHEQUEOS$resultado == "PASA"),
+            sum(CHEQUEOS$resultado == "FALLA"), sum(CHEQUEOS$resultado == "INFO")))
+
+# (c) Valoración de la call de Nutrien ----
+cat("\n(c) Valoración de la call de Nutrien\n")
+
+# 3. Insumos de la call de NTR
+
+P_c <- p0(T)
+r_c <- y0(T)
+sigma_r_c <- sP
+sigma_S_c <- sigma_call
+
+# Aproximación de dividendo continuo basada en el último pago trimestral
+# documentado en la Bitácora 2. No supone una fecha ex-dividendo observada.
+dividendo_trimestral_c <- 0.55
+q_c <- 4 * dividendo_trimestral_c / S0
+
+bid_c <- call_enero$bid
+ask_c <- call_enero$ask
+mid_c <- (bid_c + ask_c) / 2
+
+stopifnot(
+  nrow(call_enero) == 1L, T > 0, P_c > 0, sigma_S_c > 0,
+  bid_c <= ask_c, abs(P_c - exp(-r_c * T)) < 1e-10
+)
+
+insumos_c <- data.frame(
+  fecha = fecha_valoracion, vence = vencimiento, dias = dias,
+  spot = S0, strike = K, descuento = P_c, tasa_cero_pct = 100 * r_c,
+  a = aP, sigma_r = sigma_r_c, IV_call_pct = 100 * sigma_S_c,
+  q_pct = 100 * q_c, bid = bid_c, ask = ask_c, mid = mid_c
+)
+
+print(insumos_c)
+
+# 4. Vasicek frente a Black–Scholes para el mismo contrato
+
+var_ntr <- vapply(
+  rho_c,
+  function(rho) varianza_vasicek(T, aP, sigma_r_c, sigma_S_c, rho),
+  numeric(1)
+)
+
+precio_ntr <- function(v, q = q_c) {
+  call_varianza(S0, K, T, P_c, q, v)
+}
+
+call_vas_c <- vapply(var_ntr, precio_ntr, numeric(1))
+call_bs_c <- precio_ntr(sigma_S_c^2 * T)
+
+resultados_c <- data.frame(
+  modelo = c("Black–Scholes", rep("Vasicek", 3)),
+  rho = c(NA_real_, rho_c),
+  Sigma = sqrt(c(sigma_S_c^2 * T, var_ntr)),
+  precio_USD = c(call_bs_c, call_vas_c)
+)
+
+resultados_c$dif_vs_BS_USD <- resultados_c$precio_USD - call_bs_c
+resultados_c$dif_vs_mid_USD <- resultados_c$precio_USD - mid_c
+
+cat("Precios y diferencias en USD por acción.\n")
+print(resultados_c, digits = 6, row.names = FALSE)
+
+# ¿Cuánto importa la tasa estocástica para esta opción de pocos meses?
+impacto_max_c <- max(abs(call_vas_c - call_bs_c))
+spread_c <- ask_c - bid_c
+
+cat(sprintf(
+  "Para los %d días restantes, la mayor diferencia absoluta frente a Black–Scholes es USD %.5f por acción (%.3f %% del precio BS).",
+  dias, impacto_max_c, 100 * impacto_max_c / call_bs_c
+))
+
+if (spread_c > 0) {
+  cat(sprintf(
+    "\nEl spread bid–ask es USD %.2f. La diferencia máxima equivale al %.2f %% de ese spread.",
+    spread_c, 100 * impacto_max_c / spread_c
+  ))
+}
+
+# Sensibilidad al supuesto de dividendos, manteniendo rho = 0.
+i_central <- match(0, rho_c)
+call_sin_div_c <- precio_ntr(var_ntr[i_central], q = 0)
+
+cat(sprintf(
+  "\nCon rho = 0, el precio es USD %.4f con q = %.3f %% y USD %.4f con q = 0.",
+  call_vas_c[i_central], 100 * q_c, call_sin_div_c
+))
+
+# 5. Cuadro de las tres bitácoras
+
+cuadro_tres_bitacoras <- data.frame(
+  concepto = c("Fecha de cotización", "Vencimiento", "Strike (USD)",
+               "Método", "Precio teórico (USD)", "Mercado mid (USD)"),
+  `Bitácora 1` = c(
+    "28/09/2026", "18/12/2026", "72.50",
+    "Black–Scholes con dividendo equivalente", "4.3290", "4.55"
+  ),
+  `Bitácora 2` = c(
+    "02/11/2026", "18/12/2026", "70.00",
+    "Monte Carlo repesado, deriva estimada", "3.0587", "3.60"
+  ),
+  `Bitácora 3` = c(
+    format(fecha_valoracion, "%d/%m/%Y"),
+    format(vencimiento, "%d/%m/%Y"),
+    sprintf("%.2f", K),
+    "Vasicek, rho = 0, con dividendo equivalente",
+    sprintf("%.4f", call_vas_c[i_central]),
+    sprintf("%.2f", mid_c)
+  ),
+  check.names = FALSE
+)
+
+cat("\nComparación de las tres bitácoras (USD por acción)\n")
+print(cuadro_tres_bitacoras, row.names = FALSE, right = FALSE)
+
+# (d) Diagnóstico del ajuste de Vasicek ----
+cat("\n(d) Diagnóstico del ajuste de Vasicek\n")
+
+# ¿Qué bQ necesitaría Vasicek para calzar cada plazo por separado?
+plazos_d <- c(2, 5, 10)
+
+bQ_por_plazo <- vapply(plazos_d, function(t) {
+  calibrar_b(t, y0(t), r0, aP, sP)
+}, numeric(1))
+
+diagnostico_d <- data.frame(
+  plazo_anios = plazos_d,
+  bQ_exacto = bQ_por_plazo,
+  lambda_implicito = (bP - bQ_por_plazo) / sP,
+  error_con_bQ_unico_pb = 1e4 * (
+    y_vas(plazos_d, r0, aP, bQ, sP) - y0(plazos_d)
+  )
+)
+
+print(round(diagnostico_d, 4), row.names = FALSE)
+
+# Costo del ajuste con un solo parámetro en todos los nodos de (b).
+cat(sprintf("\nRMSE de la curva con un único bQ: %.2f pb\n",
+            sqrt(mean(comp_b$dif_Q_pb^2))))
+
+# Efecto sobre la call: cambiar únicamente el descuento, con rho = 0.
+i0 <- match(0, rho_c)
+precio_curva_d <- call_varianza(S0, K, T, p0(T), q_c, var_ntr[i0])
+precio_vas_d <- call_varianza(
+  S0, K, T, p_vas(T, r0, aP, bQ, sP), q_c, var_ntr[i0]
+)
+
+cat(sprintf(
+  "Call con descuento del Tesoro: USD %.5f\nCall con descuento de Vasicek: USD %.5f\nDiferencia por acción: USD %+.5f\n",
+  precio_curva_d, precio_vas_d, precio_vas_d - precio_curva_d
+))

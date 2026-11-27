@@ -1,0 +1,8 @@
+"chequeo","valor","referencia","resultado","podia_fallar","nota"
+"p(0,5), curva f = 0.05 - 0.02 e^{-T}","0.794427","0.794427","PASA","si",""
+"tasa swap anual a 5 anios, caso base (Prop. 19.8)","4.6822 %","4.6822 %","PASA","si",""
+"Vasicek p(0,5), a=0.5 b=0.025 sigma=0.01 r0=3 %","0.808302","0.808302","PASA","si",""
+"Call del curso Vasicek, rho = -1","9.625864","9.6259","PASA","si",""
+"Call del curso Vasicek, rho = 0","9.790696","9.7907","PASA","si",""
+"Call del curso Vasicek, rho = 1","9.952140","9.9521","PASA","si",""
+"Call del curso Black–Scholes","9.788467","9.7885","PASA","si",""
